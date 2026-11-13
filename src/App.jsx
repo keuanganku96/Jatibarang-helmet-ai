@@ -1,42 +1,56 @@
-import { useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
+
+const seedProducts = [
+  {id:1,name:"Helm INK Centro",sku:"INK-001",category:"Helm",price:425000,cost:350000,stock:12,min:4},
+  {id:2,name:"Helm KYT Kyoto",sku:"KYT-001",category:"Helm",price:580000,cost:475000,stock:7,min:4},
+  {id:3,name:"Helm NHK R6",sku:"NHK-001",category:"Helm",price:390000,cost:315000,stock:3,min:4},
+  {id:4,name:"Sarung Tangan",sku:"ACC-001",category:"Aksesori",price:65000,cost:35000,stock:18,min:5},
+  {id:5,name:"Kaca Helm Bogo",sku:"ACC-002",category:"Aksesori",price:45000,cost:22000,stock:0,min:4}
+];
+const money = n => new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",maximumFractionDigits:0}).format(Number(n)||0);
+const read = (key, fallback) => { try { const v=localStorage.getItem(key); return v?JSON.parse(v):fallback; } catch { return fallback; } };
 
 export default function App() {
-  const [menu, setMenu] = useState("Dashboard");
-
-  const menus = [
-    "Dashboard",
-    "Kasir",
-    "Produk & Stok",
-    "Pelanggan",
-    "Pembelian",
-    "Laporan",
-    "Pengaturan"
-  ];
-
-  return (
-    <div style={{fontFamily:"Arial",background:"#f4f7fb",minHeight:"100vh"}}>
-      <header style={{background:"#101c35",color:"white",padding:20}}>
-        <h2>SMART POS JATIBARANG</h2>
-        <p>Jatibarang Helmet</p>
-      </header>
-
-      <nav style={{display:"flex",flexWrap:"wrap",gap:8,padding:15}}>
-        {menus.map(item => (
-          <button key={item} onClick={() => setMenu(item)}
-            style={{padding:12,border:0,borderRadius:8,background:menu===item?"#159565":"white",color:menu===item?"white":"#17233b"}}>
-            {item}
-          </button>
-        ))}
-      </nav>
-
-      <main style={{padding:20}}>
-        <h1>{menu}</h1>
-        <div style={{background:"white",padding:25,borderRadius:12}}>
-          <h3>Selamat datang di SMART POS</h3>
-          <p>Sistem kasir dan manajemen Jatibarang Helmet.</p>
-          <p>Modul {menu} sedang disiapkan.</p>
-        </div>
-      </main>
-    </div>
-  );
+  const [page,setPage]=useState("Dashboard");
+  const [products,setProducts]=useState(()=>read("sj_products",seedProducts));
+  const [sales,setSales]=useState(()=>read("sj_sales",[]));
+  const [customers,setCustomers]=useState(()=>read("sj_customers",[]));
+  const [cart,setCart]=useState([]);
+  const [query,setQuery]=useState("");
+  const [notice,setNotice]=useState("");
+  const [productForm,setProductForm]=useState(false);
+  const [newProduct,setNewProduct]=useState({name:"",sku:"",category:"Helm",price:"",cost:"",stock:"",min:4});
+  const [customerName,setCustomerName]=useState("");
+  const [payment,setPayment]=useState("Tunai");
+  const [mobileMenu,setMobileMenu]=useState(false);
+  useEffect(()=>localStorage.setItem("sj_products",JSON.stringify(products)),[products]);
+  useEffect(()=>localStorage.setItem("sj_sales",JSON.stringify(sales)),[sales]);
+  useEffect(()=>localStorage.setItem("sj_customers",JSON.stringify(customers)),[customers]);
+  useEffect(()=>{if(notice){const t=setTimeout(()=>setNotice(""),3000);return()=>clearTimeout(t)}},[notice]);
+  const today=new Date().toLocaleDateString("id-ID");
+  const todaySales=sales.filter(s=>s.date===today);
+  const revenue=todaySales.reduce((a,s)=>a+s.total,0);
+  const lowStock=products.filter(p=>p.stock>0&&p.stock<=p.min).length;
+  const outStock=products.filter(p=>p.stock===0).length;
+  const filtered=products.filter(p=>(p.name+" "+p.sku+" "+p.category).toLowerCase().includes(query.toLowerCase()));
+  const cartTotal=cart.reduce((a,c)=>a+c.price*c.qty,0);
+  const menus=[["Dashboard","▦"],["Kasir","▣"],["Produk & Stok","▤"],["Pelanggan","♙"],["Pembelian","⇧"],["Laporan","▥"],["Pengaturan","⚙"]];
+  function addCart(p){if(p.stock<=0){setNotice("Stok produk habis.");return;}setCart(old=>{const found=old.find(x=>x.id===p.id);if(found){if(found.qty>=p.stock){setNotice("Jumlah melebihi stok.");return old;}return old.map(x=>x.id===p.id?{...x,qty:x.qty+1}:x)}return [...old,{...p,qty:1}]});}
+  function checkout(){if(!cart.length)return;for(const c of cart){const p=products.find(x=>x.id===c.id);if(!p||p.stock<c.qty){setNotice("Stok berubah. Periksa kembali keranjang.");return;}}const sale={id:Date.now(),date:today,time:new Date().toLocaleTimeString("id-ID"),items:cart.map(({id,name,price,qty})=>({id,name,price,qty})),total:cartTotal,payment,customer:customerName||"Pelanggan Umum"};setSales(old=>[sale,...old]);setProducts(old=>old.map(p=>{const c=cart.find(x=>x.id===p.id);return c?{...p,stock:p.stock-c.qty}:p}));if(customerName&&!customers.some(c=>c.name.toLowerCase()===customerName.toLowerCase()))setCustomers(old=>[...old,{id:Date.now(),name:customerName,phone:""}]);setCart([]);setCustomerName("");setNotice("Transaksi berhasil disimpan di perangkat ini.");}
+  function saveProduct(e){e.preventDefault();if(!newProduct.name||!newProduct.price){setNotice("Nama dan harga jual wajib diisi.");return;}setProducts(old=>[...old,{...newProduct,id:Date.now(),price:Number(newProduct.price),cost:Number(newProduct.cost)||0,stock:Number(newProduct.stock)||0,min:Number(newProduct.min)||0}]);setNewProduct({name:"",sku:"",category:"Helm",price:"",cost:"",stock:"",min:4});setProductForm(false);setNotice("Produk berhasil ditambahkan.");}
+  const card=(label,value,sub,icon)=> <div className="stat"><span className="stat-icon">{icon}</span><div><small>{label}</small><strong>{value}</strong><span className="muted">{sub}</span></div></div>;
+  return <div className="app-shell">
+    <aside className={mobileMenu?"sidebar open":"sidebar"}><div className="brand"><div className="brand-mark">SJ</div><div><b>SMART POS</b><small>JATIBARANG HELMET</small></div></div><div className="side-label">MENU UTAMA</div>{menus.map(([m,i])=><button key={m} className={page===m?"side-link active":"side-link"} onClick={()=>{setPage(m);setMobileMenu(false)}}><span>{i}</span>{m}</button>)}<div className="side-bottom"><span className="status-dot"></span> Mode perangkat aktif<small>Versi awal · Data lokal</small></div></aside>
+    <main className="main-area"><header className="topbar"><button className="hamb" onClick={()=>setMobileMenu(!mobileMenu)}>☰</button><div><b>{page}</b><small>Jatibarang Helmet · {today}</small></div><div className="top-right"><span className="online"><i/> Toko aktif</span><div className="avatar">JH</div></div></header>
+    <div className="content">
+      {notice&&<div className="notice">{notice}<button onClick={()=>setNotice("")}>×</button></div>}
+      {page==="Dashboard"&&<><div className="welcome"><div><span className="eyebrow">RINGKASAN TOKO</span><h1>Selamat datang 👋</h1><p>Pantau aktivitas penjualan dan persediaan toko hari ini.</p></div><button className="primary" onClick={()=>setPage("Kasir")}>＋ Transaksi baru</button></div><div className="stats">{card("Penjualan hari ini",money(revenue),todaySales.length+" transaksi","↗")}{card("Total produk",products.length+" item","Produk terdaftar","▤")}{card("Stok menipis",lowStock+" item","Perlu segera restock","⚠")}{card("Stok habis",outStock+" item","Tidak dapat dijual","⊘")}</div><div className="grid-two"><section className="panel"><div className="panel-head"><div><h3>Transaksi terbaru</h3><p>Riwayat penjualan terakhir</p></div><button className="text-btn" onClick={()=>setPage("Laporan")}>Lihat semua →</button></div>{sales.length===0?<div className="empty">Belum ada transaksi.<br/>Mulai transaksi pertama melalui menu Kasir.</div>:<div className="table-wrap"><table><thead><tr><th>WAKTU</th><th>PELANGGAN</th><th>PEMBAYARAN</th><th>TOTAL</th></tr></thead><tbody>{sales.slice(0,5).map(s=><tr key={s.id}><td>{s.time}</td><td>{s.customer}</td><td>{s.payment}</td><td className="amount">{money(s.total)}</td></tr>)}</tbody></table></div>}</section><section className="panel"><div className="panel-head"><div><h3>Perhatian stok</h3><p>Produk yang perlu dipantau</p></div><button className="text-btn" onClick={()=>setPage("Produk & Stok")}>Kelola →</button></div>{products.filter(p=>p.stock<=p.min).length===0?<div className="empty">Semua stok aman.</div>:products.filter(p=>p.stock<=p.min).map(p=><div className="stock-row" key={p.id}><div><b>{p.name}</b><small>{p.sku||"Tanpa SKU"}</small></div><span className={p.stock===0?"badge red":"badge yellow"}>{p.stock===0?"Habis":p.stock+" tersisa"}</span></div>)}</section></div></>}
+      {page==="Kasir"&&<><div className="welcome"><div><span className="eyebrow">POINT OF SALE</span><h1>Kasir</h1><p>Pilih produk untuk memulai transaksi.</p></div></div><div className="pos-layout"><section className="panel"><div className="searchbar"><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Cari nama produk atau SKU..."/></div><div className="product-grid">{filtered.map(p=><button className="product-tile" key={p.id} onClick={()=>addCart(p)} disabled={p.stock===0}><span className="product-symbol">◇</span><b>{p.name}</b><small>{p.sku} · Stok {p.stock}</small><strong>{money(p.price)}</strong></button>)}</div></section><section className="panel cart-panel"><div className="panel-head"><div><h3>Keranjang</h3><p>{cart.reduce((a,c)=>a+c.qty,0)} item dipilih</p></div><button className="text-btn" onClick={()=>setCart([])}>Kosongkan</button></div>{cart.length===0?<div className="empty">Keranjang masih kosong.</div>:cart.map(c=><div className="cart-row" key={c.id}><div><b>{c.name}</b><small>{money(c.price)} / item</small></div><div className="qty"><button onClick={()=>setCart(old=>old.map(x=>x.id===c.id?{...x,qty:x.qty-1}:x).filter(x=>x.qty>0))}>−</button>{c.qty}<button onClick={()=>addCart(products.find(p=>p.id===c.id))}>＋</button></div></div>)}<div className="checkout-fields"><label>Nama pelanggan<input value={customerName} onChange={e=>setCustomerName(e.target.value)} placeholder="Pelanggan umum"/></label><label>Metode pembayaran<select value={payment} onChange={e=>setPayment(e.target.value)}><option>Tunai</option><option>Transfer bank</option><option>QRIS</option><option>Debit</option></select></label></div><div className="total-line"><span>Total</span><strong>{money(cartTotal)}</strong></div><button className="primary full" disabled={!cart.length} onClick={checkout}>Selesaikan transaksi</button></section></div></>}
+      {page==="Produk & Stok"&&<><div className="welcome"><div><span className="eyebrow">INVENTARIS</span><h1>Produk & Stok</h1><p>Kelola katalog dan pantau persediaan barang.</p></div><button className="primary" onClick={()=>setProductForm(!productForm)}>＋ Tambah produk</button></div>{productForm&&<form className="panel form-grid" onSubmit={saveProduct}><label>Nama produk<input required value={newProduct.name} onChange={e=>setNewProduct({...newProduct,name:e.target.value})}/></label><label>SKU<input value={newProduct.sku} onChange={e=>setNewProduct({...newProduct,sku:e.target.value})}/></label><label>Kategori<select value={newProduct.category} onChange={e=>setNewProduct({...newProduct,category:e.target.value})}><option>Helm</option><option>Aksesori</option><option>Suku cadang</option><option>Lainnya</option></select></label><label>Harga jual<input type="number" min="0" required value={newProduct.price} onChange={e=>setNewProduct({...newProduct,price:e.target.value})}/></label><label>Harga modal<input type="number" min="0" value={newProduct.cost} onChange={e=>setNewProduct({...newProduct,cost:e.target.value})}/></label><label>Stok awal<input type="number" min="0" value={newProduct.stock} onChange={e=>setNewProduct({...newProduct,stock:e.target.value})}/></label><div className="form-actions"><button className="primary">Simpan produk</button><button type="button" className="secondary" onClick={()=>setProductForm(false)}>Batal</button></div></form>}<section className="panel"><div className="searchbar"><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Cari produk..."/></div><div className="table-wrap"><table><thead><tr><th>PRODUK</th><th>SKU</th><th>KATEGORI</th><th>HARGA JUAL</th><th>STOK</th><th>STATUS</th><th>AKSI</th></tr></thead><tbody>{filtered.map(p=><tr key={p.id}><td><b>{p.name}</b></td><td>{p.sku||"—"}</td><td>{p.category}</td><td>{money(p.price)}</td><td>{p.stock}</td><td><span className={p.stock===0?"badge red":p.stock<=p.min?"badge yellow":"badge green"}>{p.stock===0?"Habis":p.stock<=p.min?"Menipis":"Aman"}</span></td><td><button className="text-btn" onClick={()=>{const n=prompt("Masukkan jumlah stok baru:",String(p.stock));if(n!==null&&n.trim()!==""&&Number(n)>=0)setProducts(old=>old.map(x=>x.id===p.id?{...x,stock:Number(n)}:x))}}>Ubah stok</button></td></tr>)}</tbody></table></div></section></>}
+      {page==="Pelanggan"&&<><div className="welcome"><div><span className="eyebrow">CRM</span><h1>Pelanggan</h1><p>Daftar pelanggan yang tercatat dari transaksi.</p></div></div><section className="panel"><div className="table-wrap"><table><thead><tr><th>NAMA PELANGGAN</th><th>JUMLAH TRANSAKSI</th><th>TOTAL BELANJA</th></tr></thead><tbody>{customers.map(c=>{const cs=sales.filter(s=>s.customer===c.name);return <tr key={c.id}><td><b>{c.name}</b></td><td>{cs.length}</td><td>{money(cs.reduce((a,s)=>a+s.total,0))}</td></tr>})}</tbody></table></div>{customers.length===0&&<div className="empty">Pelanggan akan tercatat otomatis setelah transaksi.</div>}</section></>}
+      {page==="Pembelian"&&<><div className="welcome"><div><span className="eyebrow">PENGADAAN</span><h1>Pembelian & Restock</h1><p>Catat penerimaan barang dan tambah stok produk.</p></div></div><section className="panel"><h3>Tambah stok barang</h3><p className="muted">Pilih produk dan masukkan jumlah barang yang diterima.</p>{products.map(p=><div className="stock-row" key={p.id}><div><b>{p.name}</b><small>Stok saat ini: {p.stock}</small></div><button className="secondary" onClick={()=>{const n=prompt("Jumlah stok masuk untuk "+p.name+":");if(n!==null&&Number(n)>0){setProducts(old=>old.map(x=>x.id===p.id?{...x,stock:x.stock+Number(n)}:x));setNotice("Stok berhasil diperbarui.")}}}>＋ Stok masuk</button></div>)}</section></>}
+      {page==="Laporan"&&<><div className="welcome"><div><span className="eyebrow">ANALITIK</span><h1>Laporan Penjualan</h1><p>Ringkasan seluruh transaksi yang tersimpan.</p></div><button className="secondary" onClick={()=>{const rows=[["Tanggal","Waktu","Pelanggan","Pembayaran","Total"],...sales.map(s=>[s.date,s.time,s.customer,s.payment,s.total])];const csv=rows.map(r=>r.map(x=>'"'+String(x).replaceAll('"','""')+'"').join(",")).join("\n");const a=document.createElement("a");a.href=URL.createObjectURL(new Blob(["\ufeff"+csv],{type:"text/csv;charset=utf-8"}));a.download="laporan-smart-pos.csv";a.click();URL.revokeObjectURL(a.href)}}>↓ Ekspor CSV</button></div><div className="stats">{card("Total transaksi",sales.length,"Semua waktu","▣")}{card("Total penjualan",money(sales.reduce((a,s)=>a+s.total,0)),"Semua waktu","↗")}{card("Penjualan hari ini",money(revenue),today,"▦")}{card("Rata-rata transaksi",money(sales.length?sales.reduce((a,s)=>a+s.total,0)/sales.length:0),"Per transaksi","◷")}</div><section className="panel"><div className="table-wrap"><table><thead><tr><th>TANGGAL</th><th>WAKTU</th><th>PELANGGAN</th><th>ITEM</th><th>PEMBAYARAN</th><th>TOTAL</th></tr></thead><tbody>{sales.map(s=><tr key={s.id}><td>{s.date}</td><td>{s.time}</td><td>{s.customer}</td><td>{s.items.reduce((a,i)=>a+i.qty,0)}</td><td>{s.payment}</td><td className="amount">{money(s.total)}</td></tr>)}</tbody></table></div>{sales.length===0&&<div className="empty">Belum ada data penjualan.</div>}</section></>}
+      {page==="Pengaturan"&&<><div className="welcome"><div><span className="eyebrow">KONFIGURASI</span><h1>Pengaturan</h1><p>Informasi dasar aplikasi.</p></div></div><section className="panel settings"><h3>Jatibarang Helmet</h3><p>SMART POS JATIBARANG</p><div className="setting-row"><span>Status aplikasi</span><b className="badge green">Aktif di perangkat ini</b></div><div className="setting-row"><span>Penyimpanan</span><b>Local storage browser</b></div><div className="setting-row"><span>Sinkronisasi antar perangkat</span><b className="badge yellow">Belum diaktifkan</b></div><div className="setting-row"><span>Versi</span><b>0.2.0 · Fondasi operasional</b></div><p className="warning-note">Penting: data versi ini tersimpan pada browser/perangkat yang digunakan. Belum tersinkron ke Supabase atau perangkat lain. Jangan jadikan satu-satunya catatan transaksi sebelum sinkronisasi database dan pencadangan diaktifkan.</p><button className="secondary danger" onClick={()=>{if(confirm("Hapus semua data lokal aplikasi ini? Tindakan tidak dapat dibatalkan.")){localStorage.removeItem("sj_products");localStorage.removeItem("sj_sales");localStorage.removeItem("sj_customers");location.reload()}}}>Reset data perangkat</button></section></>}
+      <footer>SMART POS JATIBARANG · Sistem kasir Jatibarang Helmet</footer>
+    </div></main></div>;
 }
