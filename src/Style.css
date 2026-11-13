@@ -1,0 +1,51 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  background: #f4f7fb;
+  color: #17233b;
+}
+
+button {
+  cursor: pointer;
+  font-size: 14px;
+}
+
+header {
+  background: #101c35;
+  color: white;
+  padding: 20px;
+}
+
+nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 15px;
+}
+
+nav button {
+  padding: 12px 18px;
+  border: none;
+  border-radius: 8px;
+  background: white;
+  color: #17233b;
+}
+
+nav button:hover {
+  background: #159565;
+  color: white;
+}
+
+main {
+  padding: 20px;
+}
+
+main > div {
+  background: white;
+  padding: 25px;
+  border-radius: 12px;
+}
