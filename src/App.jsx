@@ -3,7 +3,7 @@ import { supabase, supabaseConfigured } from "./supabase.js";
 
 const money = value => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(Number(value) || 0);
 const BUSINESS_ID = "8552ecbe-a62e-41b9-b274-b855f6b5e37b";
-const NAV = [["Dashboard","▦"],["Kasir","▣"],["Produk & Stok","▤"],["Pelanggan","♙"],["Laporan","▥"],["Pengaturan","⚙"]];
+const NAV = [["Dashboard","▦"],["Kasir","▣"],["Produk & Stok","▤"],["Pembelian","⇧"],["Pemasok","♧"],["Pelanggan","♙"],["Laporan","▥"],["Pengaturan","⚙"]];
 
 function Login({ onLogin }) {
   const [email,setEmail] = useState("");
@@ -42,6 +42,8 @@ export default function App() {
   const [warehouseId,setWarehouseId] = useState("");
   const [products,setProducts] = useState([]);
   const [customers,setCustomers] = useState([]);
+  const [suppliers,setSuppliers] = useState([]);
+  const [purchases,setPurchases] = useState([]);
   const [sales,setSales] = useState([]);
   const [cart,setCart] = useState([]);
   const [search,setSearch] = useState("");
@@ -51,6 +53,10 @@ export default function App() {
   const [showCustomerForm,setShowCustomerForm] = useState(false);
   const [productForm,setProductForm] = useState({name:"",sku:"",barcode:"",category:"Helm",unit:"pcs",cost_price:"",selling_price:"",min_stock:"3",initial_quantity:"0"});
   const [customerForm,setCustomerForm] = useState({name:"",phone:"",email:"",address:""});
+  const [showSupplierForm,setShowSupplierForm] = useState(false);
+  const [supplierForm,setSupplierForm] = useState({name:"",phone:"",email:"",address:""});
+  const [purchaseForm,setPurchaseForm] = useState({supplier_id:"",notes:"",product_id:"",quantity:"1",unit_cost:""});
+  const [purchaseCart,setPurchaseCart] = useState([]);
 
   useEffect(()=>{
     if (!supabaseConfigured || !supabase) { setAuthLoading(false); return; }
@@ -69,7 +75,7 @@ export default function App() {
       if(memberError) throw memberError;
       if(!member) throw new Error("Akun ini belum terdaftar sebagai anggota bisnis. Hubungi Owner.");
       const businessId = member.business_id;
-      const [bizRes,branchRes,warehouseRes,productRes,inventoryRes,categoryRes,customerRes,salesRes] = await Promise.all([
+      const [bizRes,branchRes,warehouseRes,productRes,inventoryRes,categoryRes,customerRes,salesRes,suppliersRes,purchasesRes] = await Promise.all([
         supabase.from("businesses").select("id,name,currency,timezone").eq("id",businessId).single(),
         supabase.from("branches").select("id,name,is_active").eq("business_id",businessId).eq("is_active",true).order("name"),
         supabase.from("warehouses").select("id,name,branch_id,is_active").eq("business_id",businessId).eq("is_active",true).order("name"),
@@ -77,9 +83,11 @@ export default function App() {
         supabase.from("inventory").select("product_id,warehouse_id,quantity").eq("business_id",businessId),
         supabase.from("categories").select("id,name").eq("business_id",businessId).order("name"),
         supabase.from("customers").select("id,name,phone,email,address").eq("business_id",businessId).order("name"),
-        supabase.from("sales").select("id,invoice_no,status,total,created_at,customer_id,sale_items(quantity)").eq("business_id",businessId).order("created_at",{ascending:false}).limit(100)
+        supabase.from("sales").select("id,invoice_no,status,total,created_at,customer_id,sale_items(quantity)").eq("business_id",businessId).order("created_at",{ascending:false}).limit(100),
+        supabase.from("suppliers").select("id,name,phone,email,address").eq("business_id",businessId).order("name"),
+        supabase.from("purchase_orders").select("id,purchase_no,status,total,created_at,suppliers(name),purchase_items(quantity)").eq("business_id",businessId).order("created_at",{ascending:false}).limit(100)
       ]);
-      for(const result of [bizRes,branchRes,warehouseRes,productRes,inventoryRes,categoryRes,customerRes,salesRes]) if(result.error) throw result.error;
+      for(const result of [bizRes,branchRes,warehouseRes,productRes,inventoryRes,categoryRes,customerRes,salesRes,suppliersRes,purchasesRes]) if(result.error) throw result.error;
       const activeBranch = branchRes.data.find(b=>b.id===member.branch_id) || branchRes.data[0];
       const activeWarehouse = warehouseRes.data.find(w=>w.branch_id===activeBranch?.id) || warehouseRes.data[0];
       const categoryMap = Object.fromEntries(categoryRes.data.map(c=>[c.id,c.name]));
@@ -95,6 +103,7 @@ export default function App() {
       setBranchId(activeBranch?.id||""); setWarehouseId(activeWarehouse?.id||"");
       setProducts(productRes.data.map(p=>({...p,category:categoryMap[p.category_id]||"Umum",stock:stockMap[p.id]||0,price:Number(p.selling_price),cost:Number(p.cost_price),min:Number(p.min_stock)})));
       setCustomers(customerRes.data); setSales(salesRes.data);
+      setSuppliers(suppliersRes.data); setPurchases(purchasesRes.data);
     } catch(e) { setError(e.message||"Gagal memuat data toko."); }
     finally { setBusy(false); }
   },[session]);
@@ -154,6 +163,36 @@ export default function App() {
     setShowCustomerForm(false);setCustomerForm({name:"",phone:"",email:"",address:""});setNotice("Pelanggan berhasil ditambahkan.");await loadData();
   }
 
+  async function saveSupplier(e){
+    e.preventDefault();setBusy(true);setError("");
+    const {error:saveError}=await supabase.from("suppliers").insert({business_id:business.id,name:supplierForm.name.trim(),phone:supplierForm.phone||null,email:supplierForm.email||null,address:supplierForm.address||null});
+    setBusy(false);if(saveError){setError(saveError.message);return;}
+    setShowSupplierForm(false);setSupplierForm({name:"",phone:"",email:"",address:""});setNotice("Pemasok berhasil ditambahkan.");await loadData();
+  }
+
+  function addPurchaseItem(){
+    const product=products.find(p=>p.id===purchaseForm.product_id);
+    const quantity=Number(purchaseForm.quantity), unit_cost=Number(purchaseForm.unit_cost);
+    if(!product||!Number.isFinite(quantity)||quantity<=0||!Number.isFinite(unit_cost)||unit_cost<0){setError("Pilih produk dan isi jumlah serta harga modal dengan benar.");return;}
+    if(purchaseCart.some(item=>item.product_id===product.id)){setError("Produk tersebut sudah ada di daftar pembelian.");return;}
+    setPurchaseCart(old=>[...old,{product_id:product.id,name:product.name,quantity,unit_cost}]);
+    setPurchaseForm(old=>({...old,product_id:"",quantity:"1",unit_cost:""}));setError("");
+  }
+
+  async function savePurchase(){
+    if(!purchaseCart.length||!warehouseId)return;
+    setBusy(true);setError("");
+    const {data,error:saveError}=await supabase.rpc("receive_purchase",{
+      p_business_id:business.id,p_branch_id:branchId,p_warehouse_id:warehouseId,
+      p_supplier_id:purchaseForm.supplier_id||null,
+      p_items:purchaseCart.map(item=>({product_id:item.product_id,quantity:item.quantity,unit_cost:item.unit_cost})),
+      p_notes:purchaseForm.notes||null
+    });
+    setBusy(false);if(saveError){setError(saveError.message);return;}
+    setPurchaseCart([]);setPurchaseForm({supplier_id:"",notes:"",product_id:"",quantity:"1",unit_cost:""});
+    setNotice("Pembelian "+(data?.[0]?.purchase_no||"")+" diterima; stok gudang bertambah.");await loadData();
+  }
+
   const card=(label,value,sub,icon)=><div className="stat"><span className="stat-icon">{icon}</span><div><small>{label}</small><strong>{value}</strong><span className="muted">{sub}</span></div></div>;
 
   if(!supabaseConfigured)return <main className="auth-screen"><div className="auth-card"><h1>SMART POS JATIBARANG</h1><p>Koneksi Supabase belum dikonfigurasi pada deployment ini. Periksa Vercel Environment Variables lalu deploy ulang.</p></div></main>;
@@ -192,6 +231,14 @@ export default function App() {
         {page==="Produk & Stok"&&<><div className="welcome"><div><span className="eyebrow">INVENTARIS</span><h1>Produk & Stok</h1><p>Katalog dan jumlah stok dari gudang Supabase.</p></div><button className="primary" onClick={()=>setShowProductForm(v=>!v)}>＋ Tambah produk</button></div>
           {showProductForm&&<form className="panel form-grid" onSubmit={saveProduct}><label>Nama produk<input required value={productForm.name} onChange={e=>setProductForm({...productForm,name:e.target.value})}/></label><label>SKU<input value={productForm.sku} onChange={e=>setProductForm({...productForm,sku:e.target.value})}/></label><label>Barcode<input value={productForm.barcode} onChange={e=>setProductForm({...productForm,barcode:e.target.value})}/></label><label>Kategori<input value={productForm.category} onChange={e=>setProductForm({...productForm,category:e.target.value})}/></label><label>Harga modal<input type="number" min="0" required value={productForm.cost_price} onChange={e=>setProductForm({...productForm,cost_price:e.target.value})}/></label><label>Harga jual<input type="number" min="0" required value={productForm.selling_price} onChange={e=>setProductForm({...productForm,selling_price:e.target.value})}/></label><label>Stok minimum<input type="number" min="0" value={productForm.min_stock} onChange={e=>setProductForm({...productForm,min_stock:e.target.value})}/></label><label>Stok awal<input type="number" min="0" value={productForm.initial_quantity} onChange={e=>setProductForm({...productForm,initial_quantity:e.target.value})}/></label><div className="form-actions"><button className="primary" disabled={busy}>Simpan produk</button><button type="button" className="secondary" onClick={()=>setShowProductForm(false)}>Batal</button></div></form>}
           <section className="panel"><div className="searchbar"><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Cari produk..."/></div><div className="table-wrap"><table><thead><tr><th>PRODUK</th><th>SKU</th><th>KATEGORI</th><th>HARGA JUAL</th><th>STOK</th><th>STATUS</th></tr></thead><tbody>{filteredProducts.map(p=><tr key={p.id}><td><b>{p.name}</b></td><td>{p.sku||"—"}</td><td>{p.category}</td><td>{money(p.price)}</td><td>{p.stock}</td><td><span className={p.stock<=0?"badge red":p.stock<=p.min?"badge yellow":"badge green"}>{p.stock<=0?"Habis":p.stock<=p.min?"Menipis":"Aman"}</span></td></tr>)}</tbody></table></div>{products.length===0&&<div className="empty">Belum ada produk di database.</div>}</section></>}
+        {page==="Pemasok"&&<><div className="welcome"><div><span className="eyebrow">MITRA TOKO</span><h1>Pemasok</h1><p>Kelola data pemasok untuk pencatatan pembelian.</p></div><button className="primary" onClick={()=>setShowSupplierForm(v=>!v)}>＋ Tambah pemasok</button></div>
+          {showSupplierForm&&<form className="panel form-grid" onSubmit={saveSupplier}><label>Nama pemasok<input required value={supplierForm.name} onChange={e=>setSupplierForm({...supplierForm,name:e.target.value})}/></label><label>Nomor telepon<input value={supplierForm.phone} onChange={e=>setSupplierForm({...supplierForm,phone:e.target.value})}/></label><label>Email<input type="email" value={supplierForm.email} onChange={e=>setSupplierForm({...supplierForm,email:e.target.value})}/></label><label>Alamat<input value={supplierForm.address} onChange={e=>setSupplierForm({...supplierForm,address:e.target.value})}/></label><div className="form-actions"><button className="primary" disabled={busy}>Simpan pemasok</button><button type="button" className="secondary" onClick={()=>setShowSupplierForm(false)}>Batal</button></div></form>}
+          <section className="panel"><div className="table-wrap"><table><thead><tr><th>NAMA PEMASOK</th><th>TELEPON</th><th>EMAIL</th><th>ALAMAT</th></tr></thead><tbody>{suppliers.map(s=><tr key={s.id}><td><b>{s.name}</b></td><td>{s.phone||"—"}</td><td>{s.email||"—"}</td><td>{s.address||"—"}</td></tr>)}</tbody></table></div>{suppliers.length===0&&<div className="empty">Belum ada data pemasok.</div>}</section></>}
+        {page==="Pembelian"&&<><div className="welcome"><div><span className="eyebrow">PENGADAAN STOK</span><h1>Pembelian barang</h1><p>Penerimaan barang menambah stok dan mencatat riwayat mutasi secara bersamaan.</p></div></div>
+          <section className="panel purchase-panel"><h3>Catat penerimaan pembelian</h3><div className="form-grid"><label>Pemasok<select value={purchaseForm.supplier_id} onChange={e=>setPurchaseForm({...purchaseForm,supplier_id:e.target.value})}><option value="">Pilih pemasok (opsional)</option>{suppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></label><label>Catatan<input value={purchaseForm.notes} onChange={e=>setPurchaseForm({...purchaseForm,notes:e.target.value})} placeholder="Nomor nota atau catatan"/></label><label>Produk<select value={purchaseForm.product_id} onChange={e=>{const p=products.find(x=>x.id===e.target.value);setPurchaseForm({...purchaseForm,product_id:e.target.value,unit_cost:p?String(p.cost):""});}}><option value="">Pilih produk</option>{products.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label><label>Jumlah<input type="number" min="0.001" step="0.001" value={purchaseForm.quantity} onChange={e=>setPurchaseForm({...purchaseForm,quantity:e.target.value})}/></label><label>Harga modal per unit<input type="number" min="0" value={purchaseForm.unit_cost} onChange={e=>setPurchaseForm({...purchaseForm,unit_cost:e.target.value})}/></label><div className="form-actions"><button type="button" className="secondary" onClick={addPurchaseItem}>＋ Tambahkan barang</button></div></div>
+            {purchaseCart.length>0&&<><div className="table-wrap"><table><thead><tr><th>PRODUK</th><th>JUMLAH</th><th>HARGA MODAL</th><th>SUBTOTAL</th><th></th></tr></thead><tbody>{purchaseCart.map(item=><tr key={item.product_id}><td>{item.name}</td><td>{item.quantity}</td><td>{money(item.unit_cost)}</td><td>{money(item.quantity*item.unit_cost)}</td><td><button className="text-btn" onClick={()=>setPurchaseCart(old=>old.filter(x=>x.product_id!==item.product_id))}>Hapus</button></td></tr>)}</tbody></table></div><div className="total-line"><span>Total pembelian</span><strong>{money(purchaseCart.reduce((a,x)=>a+x.quantity*x.unit_cost,0))}</strong></div><button className="primary" disabled={busy} onClick={savePurchase}>Simpan penerimaan dan tambah stok</button></>}
+          </section>
+          <section className="panel"><div className="panel-head"><div><h3>Riwayat pembelian</h3><p>100 transaksi pembelian terakhir</p></div></div><div className="table-wrap"><table><thead><tr><th>NOMOR</th><th>PEMASOK</th><th>TANGGAL</th><th>STATUS</th><th>TOTAL</th></tr></thead><tbody>{purchases.map(p=><tr key={p.id}><td>{p.purchase_no}</td><td>{p.suppliers?.name||"—"}</td><td>{new Date(p.created_at).toLocaleString("id-ID")}</td><td><span className="badge green">{p.status}</span></td><td>{money(p.total)}</td></tr>)}</tbody></table></div>{purchases.length===0&&<div className="empty">Belum ada riwayat pembelian.</div>}</section></>}
         {page==="Pelanggan"&&<><div className="welcome"><div><span className="eyebrow">CRM</span><h1>Pelanggan</h1><p>Data pelanggan tersimpan di cloud.</p></div><button className="primary" onClick={()=>setShowCustomerForm(v=>!v)}>＋ Tambah pelanggan</button></div>
           {showCustomerForm&&<form className="panel form-grid" onSubmit={saveCustomer}><label>Nama pelanggan<input required value={customerForm.name} onChange={e=>setCustomerForm({...customerForm,name:e.target.value})}/></label><label>Nomor telepon<input value={customerForm.phone} onChange={e=>setCustomerForm({...customerForm,phone:e.target.value})}/></label><label>Email<input type="email" value={customerForm.email} onChange={e=>setCustomerForm({...customerForm,email:e.target.value})}/></label><label>Alamat<input value={customerForm.address} onChange={e=>setCustomerForm({...customerForm,address:e.target.value})}/></label><div className="form-actions"><button className="primary" disabled={busy}>Simpan pelanggan</button></div></form>}
           <section className="panel"><div className="table-wrap"><table><thead><tr><th>NAMA</th><th>TELEPON</th><th>EMAIL</th><th>ALAMAT</th></tr></thead><tbody>{customers.map(c=><tr key={c.id}><td><b>{c.name}</b></td><td>{c.phone||"—"}</td><td>{c.email||"—"}</td><td>{c.address||"—"}</td></tr>)}</tbody></table></div>{customers.length===0&&<div className="empty">Belum ada data pelanggan.</div>}</section></>}
