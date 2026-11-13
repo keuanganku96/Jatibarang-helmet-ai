@@ -83,8 +83,14 @@ export default function App() {
       const activeBranch = branchRes.data.find(b=>b.id===member.branch_id) || branchRes.data[0];
       const activeWarehouse = warehouseRes.data.find(w=>w.branch_id===activeBranch?.id) || warehouseRes.data[0];
       const categoryMap = Object.fromEntries(categoryRes.data.map(c=>[c.id,c.name]));
+      // Show stock for the selected operating warehouse only; never combine stock
+      // from separate branches/warehouses into one sellable quantity.
       const stockMap = {};
-      for(const row of inventoryRes.data) stockMap[row.product_id]=(stockMap[row.product_id]||0)+Number(row.quantity||0);
+      for(const row of inventoryRes.data) {
+        if(row.warehouse_id === activeWarehouse?.id) {
+          stockMap[row.product_id] = Number(row.quantity || 0);
+        }
+      }
       setBusiness(bizRes.data); setMembership(member); setBranches(branchRes.data); setWarehouses(warehouseRes.data);
       setBranchId(activeBranch?.id||""); setWarehouseId(activeWarehouse?.id||"");
       setProducts(productRes.data.map(p=>({...p,category:categoryMap[p.category_id]||"Umum",stock:stockMap[p.id]||0,price:Number(p.selling_price),cost:Number(p.cost_price),min:Number(p.min_stock)})));
