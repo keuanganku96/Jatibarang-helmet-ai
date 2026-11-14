@@ -4,7 +4,7 @@ import JsBarcode from "jsbarcode";
 
 const money = value => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(Number(value) || 0);
 const BUSINESS_ID = "8552ecbe-a62e-41b9-b274-b855f6b5e37b";
-const NAV = [["Dashboard","▦"],["Kasir","▣"],["Produk & Stok","▤"],["Pembelian","⇧"],["Pemasok","♧"],["Pelanggan","♙"],["Garansi","✓"],["Laporan","▥"],["Keuangan","Rp"],["Karyawan & Shift","♙"],["Pengaturan","⚙"]];
+const NAV = [["Dashboard","▦"],["Kasir","▣"],["Produk & Stok","▤"],["Stok Opname","▧"],["Pembelian","⇧"],["Pemasok","♧"],["Pelanggan","♙"],["Garansi","✓"],["Laporan","▥"],["Keuangan","Rp"],["Karyawan & Shift","♙"],["Pengaturan","⚙"]];
 
 function Login({ onLogin }) {
   const [email,setEmail] = useState("");
@@ -73,6 +73,9 @@ export default function App() {
   const [cashEntries,setCashEntries] = useState([]);
   const [attendanceRows,setAttendanceRows] = useState([]);
   const [cashSessions,setCashSessions] = useState([]);
+  const [stockOpnames,setStockOpnames] = useState([]);
+  const [stockCountDraft,setStockCountDraft] = useState({});
+  const [opnameNotes,setOpnameNotes] = useState("");
   const [openingFloat,setOpeningFloat] = useState("0");
   const [countedCash,setCountedCash] = useState("");
   const [shiftNote,setShiftNote] = useState("");
@@ -109,7 +112,7 @@ export default function App() {
       if(memberError) throw memberError;
       if(!member) throw new Error("Akun ini belum terdaftar sebagai anggota bisnis. Hubungi Owner.");
       const businessId = member.business_id;
-      const [bizRes,branchRes,warehouseRes,productRes,inventoryRes,categoryRes,customerRes,salesRes,suppliersRes,purchasesRes,paymentsRes,cashRes,tiersRes,warrantiesRes,claimsRes,attendanceRes,shiftRes] = await Promise.all([
+      const [bizRes,branchRes,warehouseRes,productRes,inventoryRes,categoryRes,customerRes,salesRes,suppliersRes,purchasesRes,paymentsRes,cashRes,tiersRes,warrantiesRes,claimsRes,attendanceRes,shiftRes,opnameRes] = await Promise.all([
         supabase.from("businesses").select("id,name,currency,timezone").eq("id",businessId).single(),
         supabase.from("branches").select("id,name,is_active").eq("business_id",businessId).eq("is_active",true).order("name"),
         supabase.from("warehouses").select("id,name,branch_id,is_active").eq("business_id",businessId).eq("is_active",true).order("name"),
@@ -126,9 +129,10 @@ export default function App() {
         supabase.from("warranties").select("id,business_id,sale_id,sale_item_id,customer_id,product_name,invoice_no,warranty_code,purchase_date,expires_at,quantity,purchase_value,coverage_percent,max_coverage_amount,min_claim_amount,max_claims,claims_used,terms").eq("business_id",businessId).order("created_at",{ascending:false}).limit(500),
         supabase.from("warranty_claims").select("id,business_id,warranty_id,claim_no,claim_description,coverage_value,status,created_at,processed_at,resolution_notes").eq("business_id",businessId).order("created_at",{ascending:false}).limit(500),
         (branchId ? supabase.from("staff_attendance").select("id,business_id,branch_id,user_id,work_date,clock_in_at,clock_out_at,clock_in_note,clock_out_note").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("staff_attendance").select("id,business_id,branch_id,user_id,work_date,clock_in_at,clock_out_at,clock_in_note,clock_out_note").eq("business_id",businessId)).order("work_date",{ascending:false}).limit(100),
-        (branchId ? supabase.from("cash_register_sessions").select("id,business_id,branch_id,cashier_id,opened_at,opening_float,closed_at,expected_cash,counted_cash,cash_difference,cash_sales,cash_outflows,opening_note,closing_note,status").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("cash_register_sessions").select("id,business_id,branch_id,cashier_id,opened_at,opening_float,closed_at,expected_cash,counted_cash,cash_difference,cash_sales,cash_outflows,opening_note,closing_note,status").eq("business_id",businessId)).order("opened_at",{ascending:false}).limit(100)
+        (branchId ? supabase.from("cash_register_sessions").select("id,business_id,branch_id,cashier_id,opened_at,opening_float,closed_at,expected_cash,counted_cash,cash_difference,cash_sales,cash_outflows,opening_note,closing_note,status").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("cash_register_sessions").select("id,business_id,branch_id,cashier_id,opened_at,opening_float,closed_at,expected_cash,counted_cash,cash_difference,cash_sales,cash_outflows,opening_note,closing_note,status").eq("business_id",businessId)).order("opened_at",{ascending:false}).limit(100),
+        (branchId ? supabase.from("stock_opnames").select("id,business_id,branch_id,warehouse_id,opname_no,status,notes,total_lines,total_difference,created_at,approved_at").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("stock_opnames").select("id,business_id,branch_id,warehouse_id,opname_no,status,notes,total_lines,total_difference,created_at,approved_at").eq("business_id",businessId)).order("created_at",{ascending:false}).limit(100)
       ]);
-      for(const result of [bizRes,branchRes,warehouseRes,productRes,inventoryRes,categoryRes,customerRes,salesRes,suppliersRes,purchasesRes,paymentsRes,cashRes,tiersRes,warrantiesRes,claimsRes,attendanceRes,shiftRes]) if(result.error) throw result.error;
+      for(const result of [bizRes,branchRes,warehouseRes,productRes,inventoryRes,categoryRes,customerRes,salesRes,suppliersRes,purchasesRes,paymentsRes,cashRes,tiersRes,warrantiesRes,claimsRes,attendanceRes,shiftRes,opnameRes]) if(result.error) throw result.error;
       // Owner/Admin may switch across active branches. Other roles remain
       // restricted to the branch assigned to their membership.
       const accessibleBranches = ["owner","admin"].includes(member.role)
@@ -152,7 +156,7 @@ export default function App() {
       setBranchId(activeBranch?.id||""); setWarehouseId(activeWarehouse?.id||"");
       setProducts(productRes.data.map(p=>({...p,category:categoryMap[p.category_id]||"Umum",stock:stockMap[p.id]||0,price:Number(p.selling_price),cost:Number(p.cost_price),min:Number(p.min_stock),discountType:p.discount_type||"none",discountValue:Number(p.discount_value)||0})));
       setCustomers(customerRes.data); setSales(salesRes.data); setMembershipTiers(tiersRes.data||[]);
-      setSuppliers(suppliersRes.data); setPurchases(purchasesRes.data); setSupplierPayments(paymentsRes.data||[]); setCashEntries(cashRes.data||[]); setWarranties(warrantiesRes.data||[]); setWarrantyClaims(claimsRes.data||[]); setAttendanceRows(attendanceRes.data||[]); setCashSessions(shiftRes.data||[]);
+      setSuppliers(suppliersRes.data); setPurchases(purchasesRes.data); setSupplierPayments(paymentsRes.data||[]); setCashEntries(cashRes.data||[]); setWarranties(warrantiesRes.data||[]); setWarrantyClaims(claimsRes.data||[]); setAttendanceRows(attendanceRes.data||[]); setCashSessions(shiftRes.data||[]); setStockOpnames(opnameRes.data||[]);
     } catch(e) { setError(e.message||"Gagal memuat data toko."); }
     finally { setBusy(false); }
   },[session,branchId,warehouseId]);
@@ -168,6 +172,24 @@ export default function App() {
     const {error:saveError}=await supabase.from("membership_tiers").upsert(payload,{onConflict:"business_id,tier_code"});
     if(saveError)setError(saveError.message);else{setNotice("Aturan membership "+tier.tier_name+" berhasil disimpan.");await loadData();}
     setBusy(false);
+  }
+
+  async function createStockOpname(){
+    if(!warehouseId||!branchId){setError("Pilih cabang dan gudang terlebih dahulu.");return;}
+    const items=products.map(p=>({product_id:p.id,counted_quantity:Number(stockCountDraft[p.id]??p.stock)}));
+    if(!items.length){setError("Belum ada produk untuk dihitung.");return;}
+    if(items.some(x=>!Number.isFinite(x.counted_quantity)||x.counted_quantity<0)){setError("Jumlah fisik harus berupa angka nol atau lebih.");return;}
+    setBusy(true);setError("");
+    const {error:e}=await supabase.rpc("create_stock_opname",{p_branch_id:branchId,p_warehouse_id:warehouseId,p_items:items,p_notes:opnameNotes||null});
+    setBusy(false);if(e){setError(e.message);return;}
+    setStockCountDraft({});setOpnameNotes("");setNotice("Stok opname dibuat sebagai draft. Menunggu persetujuan Owner/Admin.");await loadData();
+  }
+  async function approveStockOpname(row){
+    if(!window.confirm("Setujui "+row.opname_no+"? Stok gudang akan disesuaikan berdasarkan hasil hitung fisik."))return;
+    setBusy(true);setError("");
+    const {error:e}=await supabase.rpc("approve_stock_opname",{p_opname_id:row.id});
+    setBusy(false);if(e){setError(e.message);return;}
+    setNotice("Stok opname disetujui dan persediaan sudah disesuaikan.");await loadData();
   }
 
   async function recordAttendance(action){
@@ -384,6 +406,17 @@ export default function App() {
         {page==="Pemasok"&&<><div className="welcome"><div><span className="eyebrow">MITRA TOKO</span><h1>Pemasok</h1><p>Kelola data pemasok untuk pencatatan pembelian.</p></div><button className="primary" onClick={()=>setShowSupplierForm(v=>!v)}>＋ Tambah pemasok</button></div>
           {showSupplierForm&&<form className="panel form-grid" onSubmit={saveSupplier}><label>Nama pemasok<input required value={supplierForm.name} onChange={e=>setSupplierForm({...supplierForm,name:e.target.value})}/></label><label>Nomor telepon<input value={supplierForm.phone} onChange={e=>setSupplierForm({...supplierForm,phone:e.target.value})}/></label><label>Email<input type="email" value={supplierForm.email} onChange={e=>setSupplierForm({...supplierForm,email:e.target.value})}/></label><label>Alamat<input value={supplierForm.address} onChange={e=>setSupplierForm({...supplierForm,address:e.target.value})}/></label><div className="form-actions"><button className="primary" disabled={busy}>Simpan pemasok</button><button type="button" className="secondary" onClick={()=>setShowSupplierForm(false)}>Batal</button></div></form>}
           <section className="panel"><div className="table-wrap"><table><thead><tr><th>NAMA PEMASOK</th><th>TELEPON</th><th>EMAIL</th><th>ALAMAT</th></tr></thead><tbody>{suppliers.map(s=><tr key={s.id}><td><b>{s.name}</b></td><td>{s.phone||"—"}</td><td>{s.email||"—"}</td><td>{s.address||"—"}</td></tr>)}</tbody></table></div>{suppliers.length===0&&<div className="empty">Belum ada data pemasok.</div>}</section></>}
+        {page==="Stok Opname"&&<><div className="welcome"><div><span className="eyebrow">INVENTORY CONTROL</span><h1>Stok Opname</h1><p>Bandingkan stok sistem dengan hasil hitung fisik. Penyesuaian baru berlaku setelah disetujui Owner/Admin.</p></div><button className="secondary" onClick={loadData}>↻ Segarkan</button></div>
+          <section className="panel"><div className="panel-head"><div><h3>Hitung stok fisik</h3><p>Daftar produk untuk gudang yang sedang dipilih.</p></div></div>
+            <div className="form-grid"><label>Gudang aktif<input readOnly value={warehouses.find(w=>w.id===warehouseId)?.name||"Pilih gudang di bagian atas"}/></label><label>Catatan opname<input value={opnameNotes} maxLength="1000" onChange={e=>setOpnameNotes(e.target.value)} placeholder="Contoh: opname akhir bulan"/></label></div>
+            <div className="table-wrap"><table><thead><tr><th>PRODUK</th><th>SKU / BARCODE</th><th>STOK SISTEM</th><th>JUMLAH FISIK</th><th>SELISIH</th></tr></thead><tbody>{products.map(p=>{const val=stockCountDraft[p.id]??String(p.stock);const diff=Number(val||0)-Number(p.stock||0);return <tr key={p.id}><td><b>{p.name}</b><small>{p.category}</small></td><td>{p.sku||"—"}<small>{p.barcode||""}</small></td><td>{p.stock} {p.unit}</td><td><input aria-label={"Jumlah fisik "+p.name} type="number" min="0" step="0.001" value={val} onChange={e=>setStockCountDraft(s=>({...s,[p.id]:e.target.value}))}/></td><td><b className={diff===0?"text-safe":diff<0?"danger-text":"badge yellow"}>{diff>0?"+":""}{diff}</b></td></tr>})}</tbody></table></div>
+            {products.length===0&&<div className="empty">Tidak ada produk aktif di bisnis ini.</div>}
+            <div className="form-actions"><button className="primary" disabled={busy||!warehouseId||!products.length} onClick={createStockOpname}>Simpan draft stok opname</button></div>
+          </section>
+          <section className="panel"><div className="panel-head"><div><h3>Riwayat stok opname</h3><p>Draft menunggu persetujuan. Persetujuan akan mengubah stok dan membuat jejak pergerakan persediaan.</p></div></div>
+            <div className="table-wrap"><table><thead><tr><th>NOMOR</th><th>TANGGAL</th><th>BARIS PRODUK</th><th>TOTAL SELISIH ABSOLUT</th><th>STATUS</th><th>AKSI</th></tr></thead><tbody>{stockOpnames.map(o=><tr key={o.id}><td><b>{o.opname_no}</b><small>{o.notes||""}</small></td><td>{new Date(o.created_at).toLocaleString("id-ID")}</td><td>{o.total_lines}</td><td>{o.total_difference}</td><td><span className={"badge "+(o.status==="approved"?"green":o.status==="draft"?"yellow":"")}>{o.status==="approved"?"Disetujui":o.status==="draft"?"Menunggu persetujuan":"Dibatalkan"}</span></td><td>{o.status==="draft"&&["owner","admin"].includes(membership?.role)?<button className="primary small" disabled={busy} onClick={()=>approveStockOpname(o)}>Setujui</button>:"—"}</td></tr>)}</tbody></table></div>{stockOpnames.length===0&&<div className="empty">Belum ada riwayat stok opname.</div>}
+          </section>
+        </>}
         {page==="Pembelian"&&<><div className="welcome"><div><span className="eyebrow">PENGADAAN STOK</span><h1>Pembelian barang</h1><p>Penerimaan barang menambah stok dan mencatat hutang serta pembayaran supplier.</p></div></div>
           <div className="stats">{card("Sisa hutang (100 pembelian terakhir)",money(purchases.filter(p=>p.payable_tracking_enabled).reduce((s,p)=>s+Math.max(0,Number(p.total)-Number(p.amount_paid||0)),0)),"Tagihan yang tercatat pada daftar terbaru","Rp")}{card("Tagihan jatuh tempo",purchases.filter(p=>p.payable_tracking_enabled&&Number(p.total)>Number(p.amount_paid||0)&&p.due_date&&new Date(p.due_date+"T23:59:59")<new Date()).length,"Perlu segera dibayar","!")}{card("Pembayaran (300 terbaru)",money(supplierPayments.reduce((s,p)=>s+Number(p.amount||0),0)),"Riwayat pembayaran pada cabang aktif","✓")}</div>
           <section className="panel purchase-panel"><h3>Catat penerimaan pembelian</h3><div className="form-grid"><label>Pemasok<select value={purchaseForm.supplier_id} onChange={e=>setPurchaseForm({...purchaseForm,supplier_id:e.target.value})}><option value="">Pilih pemasok (opsional)</option>{suppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></label><label>Nomor invoice supplier<input value={purchaseForm.supplier_invoice_no} onChange={e=>setPurchaseForm({...purchaseForm,supplier_invoice_no:e.target.value})} placeholder="Nomor nota supplier"/></label><label>Jatuh tempo<input type="date" min={new Date().toISOString().slice(0,10)} value={purchaseForm.due_date} onChange={e=>setPurchaseForm({...purchaseForm,due_date:e.target.value})}/></label><label>Pembayaran awal (Rp)<input type="number" min="0" value={purchaseForm.initial_payment} onChange={e=>setPurchaseForm({...purchaseForm,initial_payment:e.target.value})}/></label><label>Metode pembayaran<select value={purchaseForm.payment_method} onChange={e=>setPurchaseForm({...purchaseForm,payment_method:e.target.value})}>{["Tunai","Transfer bank","QRIS","Debit"].map(x=><option key={x}>{x}</option>)}</select></label><label>Referensi pembayaran<input value={purchaseForm.payment_reference} onChange={e=>setPurchaseForm({...purchaseForm,payment_reference:e.target.value})} placeholder="Nomor transfer (opsional)"/></label><label>Catatan<input value={purchaseForm.notes} onChange={e=>setPurchaseForm({...purchaseForm,notes:e.target.value})} placeholder="Catatan pembelian"/></label><label>Produk<select value={purchaseForm.product_id} onChange={e=>{const p=products.find(x=>x.id===e.target.value);setPurchaseForm({...purchaseForm,product_id:e.target.value,unit_cost:p?String(p.cost):""});}}><option value="">Pilih produk</option>{products.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label><label>Jumlah<input type="number" min="0.001" step="0.001" value={purchaseForm.quantity} onChange={e=>setPurchaseForm({...purchaseForm,quantity:e.target.value})}/></label><label>Harga modal per unit<input type="number" min="0" value={purchaseForm.unit_cost} onChange={e=>setPurchaseForm({...purchaseForm,unit_cost:e.target.value})}/></label><div className="form-actions"><button type="button" className="secondary" onClick={addPurchaseItem}>＋ Tambahkan barang</button></div></div>
