@@ -517,7 +517,7 @@ export default function App() {
 
   return <div className="app-shell">
     <aside className="sidebar"><div className="brand"><div className="brand-mark">SJ</div><div><b>SMART POS</b><small>JATIBARANG HELMET</small></div></div>
-      <div className="side-label">MENU UTAMA</div>{visibleNav.map(([name,icon])=><button key={name} className={page===name?"side-link active":"side-link"} onClick={()=>setPage(name)}><span>{icon}</span>{name}</button>)}
+      <nav className="sidebar-nav" aria-label="Navigasi utama"><div className="side-label">MENU UTAMA</div>{visibleNav.map(([name,icon])=><button key={name} className={page===name?"side-link active":"side-link"} onClick={()=>setPage(name)}><span>{icon}</span>{name}</button>)}</nav>
       <div className="side-bottom"><span className="status-dot"></span> Terhubung ke cloud<small>{business?.name||"Memuat bisnis..."}</small></div>
     </aside>
     <main className="main-area">
