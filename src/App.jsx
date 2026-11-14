@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase, supabaseConfigured } from "./supabase.js";
+import JsBarcode from "jsbarcode";
 
 const money = value => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(Number(value) || 0);
 const BUSINESS_ID = "8552ecbe-a62e-41b9-b274-b855f6b5e37b";
@@ -25,6 +26,24 @@ function Login({ onLogin }) {
     <button className="primary full" disabled={busy}>{busy?"Memeriksa...":"Masuk ke aplikasi"}</button>
     <small>Akun Owner yang sudah terdaftar di Supabase digunakan untuk masuk.</small>
   </form></main>;
+}
+
+function CustomerBarcode({customer}) {
+  const svgRef = useRef(null);
+  const code = customer.customer_code || ("JH" + customer.id.replaceAll("-","").slice(0,12).toUpperCase());
+  useEffect(() => {
+    if (!svgRef.current || !code) return;
+    try { JsBarcode(svgRef.current, code, {format:"CODE128", displayValue:true, font:"Arial", fontSize:13, height:48, margin:5, lineColor:"#10243a", background:"#ffffff"}); }
+    catch (error) { console.error("Gagal membuat barcode pelanggan", error); }
+  }, [code]);
+  function printCard() {
+    const barcode = svgRef.current?.outerHTML || "";
+    const w = window.open("", "_blank", "width=520,height=420");
+    if (!w) return;
+    w.document.write(`<!doctype html><html><head><title>Kartu Pelanggan ${code}</title><style>body{font-family:Arial,sans-serif;padding:24px;color:#10243a}.card{width:340px;border:2px solid #10243a;border-radius:14px;padding:18px;text-align:center}.brand{font-size:12px;letter-spacing:2px;font-weight:bold}.name{font-size:20px;font-weight:bold;margin:14px 0 4px}.code{font-size:12px;color:#526174;margin-top:4px}svg{max-width:100%;height:auto}</style></head><body><div class="card"><div class="brand">JATIBARANG HELMET · MEMBER</div><div class="name">${String(customer.name).replace(/[&<>"]/g, ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[ch]))}</div>${barcode}<div class="code">${code}</div></div><script>window.onload=()=>window.print()<\/script></body></html>`);
+    w.document.close();
+  }
+  return <div className="customer-barcode"><svg ref={svgRef} role="img" aria-label={`Barcode pelanggan ${code}`}/><button type="button" className="text-btn" onClick={printCard}>Cetak kartu</button></div>;
 }
 
 export default function App() {
@@ -296,7 +315,7 @@ export default function App() {
           <section className="panel"><div className="panel-head"><div><h3>Riwayat pembelian</h3><p>100 transaksi pembelian terakhir</p></div></div><div className="table-wrap"><table><thead><tr><th>NOMOR</th><th>PEMASOK</th><th>TANGGAL</th><th>STATUS</th><th>TOTAL</th></tr></thead><tbody>{purchases.map(p=><tr key={p.id}><td>{p.purchase_no}</td><td>{p.suppliers?.name||"—"}</td><td>{new Date(p.created_at).toLocaleString("id-ID")}</td><td><span className="badge green">{p.status}</span></td><td>{money(p.total)}</td></tr>)}</tbody></table></div>{purchases.length===0&&<div className="empty">Belum ada riwayat pembelian.</div>}</section></>}
         {page==="Pelanggan"&&<><div className="welcome"><div><span className="eyebrow">CRM</span><h1>Pelanggan</h1><p>Data pelanggan tersimpan di cloud.</p></div><button className="primary" onClick={()=>setShowCustomerForm(v=>!v)}>＋ Tambah pelanggan</button></div>
           {showCustomerForm&&<form className="panel form-grid" onSubmit={saveCustomer}><label>Nama pelanggan<input required value={customerForm.name} onChange={e=>setCustomerForm({...customerForm,name:e.target.value})}/></label><label>Nomor telepon<input value={customerForm.phone} onChange={e=>setCustomerForm({...customerForm,phone:e.target.value})}/></label><label>Email<input type="email" value={customerForm.email} onChange={e=>setCustomerForm({...customerForm,email:e.target.value})}/></label><label>Alamat<input value={customerForm.address} onChange={e=>setCustomerForm({...customerForm,address:e.target.value})}/></label><div className="form-actions"><button className="primary" disabled={busy}>Simpan pelanggan</button></div></form>}
-          <section className="panel"><div className="table-wrap"><table><thead><tr><th>ID BARCODE</th><th>NAMA</th><th>TELEPON</th><th>EMAIL</th><th>ALAMAT</th></tr></thead><tbody>{customers.map(c=><tr key={c.id}><td><code>{c.customer_code||("JH"+c.id.replaceAll("-","").slice(0,12).toUpperCase())}</code></td><td><b>{c.name}</b></td><td>{c.phone||"—"}</td><td>{c.email||"—"}</td><td>{c.address||"—"}</td></tr>)}</tbody></table></div>{customers.length===0&&<div className="empty">Belum ada data pelanggan.</div>}</section></>}
+          <section className="panel"><div className="table-wrap"><table><thead><tr><th>ID BARCODE</th><th>NAMA</th><th>TELEPON</th><th>EMAIL</th><th>ALAMAT</th></tr></thead><tbody>{customers.map(c=><tr key={c.id}><td><CustomerBarcode customer={c}/></td><td><b>{c.name}</b></td><td>{c.phone||"—"}</td><td>{c.email||"—"}</td><td>{c.address||"—"}</td></tr>)}</tbody></table></div>{customers.length===0&&<div className="empty">Belum ada data pelanggan.</div>}</section></>}
         {page==="Laporan"&&<><div className="welcome"><div><span className="eyebrow">ANALITIK</span><h1>Laporan Penjualan</h1><p>Transaksi yang tercatat pada database.</p></div><button className="secondary" onClick={()=>{const rows=[["Invoice","Status","Tanggal","Total"],...sales.map(s=>[s.invoice_no,s.status,s.created_at,s.total])];const csv=rows.map(row=>row.map(v=>'"'+String(v??"").replaceAll('"','""')+'"').join(",")).join("\n");const a=document.createElement("a");a.href=URL.createObjectURL(new Blob(["\ufeff"+csv],{type:"text/csv;charset=utf-8"}));a.download="laporan-smart-pos.csv";a.click();URL.revokeObjectURL(a.href);}}>↓ Ekspor CSV</button></div>
           <div className="stats">{card("Total transaksi",sales.length,"Data cloud","▣")}{card("Total penjualan",money(sales.reduce((a,s)=>a+Number(s.total),0)),"Semua waktu","↗")}{card("Penjualan hari ini",money(revenue),todayKey,"▦")}{card("Rata-rata transaksi",money(sales.length?sales.reduce((a,s)=>a+Number(s.total),0)/sales.length:0),"Per transaksi","◷")}</div>
           <section className="panel"><div className="table-wrap"><table><thead><tr><th>INVOICE</th><th>TANGGAL</th><th>STATUS</th><th>JUMLAH ITEM</th><th>TOTAL</th></tr></thead><tbody>{sales.map(s=><tr key={s.id}><td>{s.invoice_no}</td><td>{new Date(s.created_at).toLocaleString("id-ID")}</td><td>{s.status}</td><td>{(s.sale_items||[]).reduce((n,item)=>n+Number(item.quantity),0)}</td><td className="amount">{money(s.total)}</td></tr>)}</tbody></table></div>{sales.length===0&&<div className="empty">Belum ada transaksi.</div>}</section></>}
