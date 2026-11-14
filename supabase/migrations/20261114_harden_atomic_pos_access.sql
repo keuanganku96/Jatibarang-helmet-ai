@@ -191,6 +191,14 @@ BEGIN
     RAISE EXCEPTION 'Keranjang belanja kosong.';
   END IF;
 
+  IF EXISTS (
+    SELECT 1
+    FROM jsonb_to_recordset(p_items) AS x(product_id uuid, quantity numeric)
+    WHERE x.product_id IS NULL OR x.quantity IS NULL OR x.quantity <= 0
+  ) THEN
+    RAISE EXCEPTION 'Setiap produk harus memiliki jumlah lebih dari nol.';
+  END IF;
+
   IF COALESCE(p_payment_method, '') NOT IN ('Tunai', 'Transfer bank', 'QRIS', 'Debit') THEN
     RAISE EXCEPTION 'Metode pembayaran tidak valid.';
   END IF;
