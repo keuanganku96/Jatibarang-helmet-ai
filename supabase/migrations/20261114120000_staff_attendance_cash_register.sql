@@ -13,6 +13,7 @@ create table if not exists public.staff_attendance (
   unique (business_id, branch_id, user_id, work_date)
 );
 create index if not exists staff_attendance_branch_date_idx on public.staff_attendance(business_id,branch_id,work_date desc);
+create index if not exists staff_attendance_branch_id_idx on public.staff_attendance(branch_id);
 alter table public.staff_attendance enable row level security;
 drop policy if exists staff_attendance_read_branch on public.staff_attendance;
 create policy staff_attendance_read_branch on public.staff_attendance for select to authenticated
@@ -44,6 +45,7 @@ create table if not exists public.cash_register_sessions (
 create unique index if not exists cash_register_one_open_per_cashier_branch
 on public.cash_register_sessions(business_id,branch_id,cashier_id) where status='open';
 create index if not exists cash_register_branch_opened_idx on public.cash_register_sessions(business_id,branch_id,opened_at desc);
+create index if not exists cash_register_sessions_branch_id_idx on public.cash_register_sessions(branch_id);
 alter table public.cash_register_sessions enable row level security;
 drop policy if exists cash_register_read_branch on public.cash_register_sessions;
 create policy cash_register_read_branch on public.cash_register_sessions for select to authenticated
