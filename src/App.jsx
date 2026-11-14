@@ -67,6 +67,8 @@ export default function App() {
   const [customers,setCustomers] = useState([]);
   const [suppliers,setSuppliers] = useState([]);
   const [purchases,setPurchases] = useState([]);
+  const [supplierPayments,setSupplierPayments] = useState([]);
+  const [paymentDrafts,setPaymentDrafts] = useState({});
   const [sales,setSales] = useState([]);
   const [cashEntries,setCashEntries] = useState([]);
   const [expenseForm,setExpenseForm] = useState({category:"Operasional",description:"",amount:""});
@@ -82,7 +84,7 @@ export default function App() {
   const [customerForm,setCustomerForm] = useState({name:"",phone:"",email:"",address:""});
   const [showSupplierForm,setShowSupplierForm] = useState(false);
   const [supplierForm,setSupplierForm] = useState({name:"",phone:"",email:"",address:""});
-  const [purchaseForm,setPurchaseForm] = useState({supplier_id:"",notes:"",product_id:"",quantity:"1",unit_cost:""});
+  const [purchaseForm,setPurchaseForm] = useState({supplier_id:"",notes:"",product_id:"",quantity:"1",unit_cost:"",supplier_invoice_no:"",due_date:"",initial_payment:"0",payment_method:"Tunai",payment_reference:""});
   const [purchaseCart,setPurchaseCart] = useState([]);
 
   useEffect(()=>{
@@ -102,7 +104,7 @@ export default function App() {
       if(memberError) throw memberError;
       if(!member) throw new Error("Akun ini belum terdaftar sebagai anggota bisnis. Hubungi Owner.");
       const businessId = member.business_id;
-      const [bizRes,branchRes,warehouseRes,productRes,inventoryRes,categoryRes,customerRes,salesRes,suppliersRes,purchasesRes,cashRes,tiersRes,warrantiesRes,claimsRes] = await Promise.all([
+      const [bizRes,branchRes,warehouseRes,productRes,inventoryRes,categoryRes,customerRes,salesRes,suppliersRes,purchasesRes,paymentsRes,cashRes,tiersRes,warrantiesRes,claimsRes] = await Promise.all([
         supabase.from("businesses").select("id,name,currency,timezone").eq("id",businessId).single(),
         supabase.from("branches").select("id,name,is_active").eq("business_id",businessId).eq("is_active",true).order("name"),
         supabase.from("warehouses").select("id,name,branch_id,is_active").eq("business_id",businessId).eq("is_active",true).order("name"),
@@ -112,13 +114,14 @@ export default function App() {
         supabase.from("customers").select("id,name,customer_code,phone,email,address,total_transactions,total_spend,membership_tier").eq("business_id",businessId).order("name"),
         (branchId ? supabase.from("sales").select("id,invoice_no,status,total,created_at,customer_id,sale_items(quantity)").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("sales").select("id,invoice_no,status,total,created_at,customer_id,sale_items(quantity)").eq("business_id",businessId)).order("created_at",{ascending:false}).limit(100),
         supabase.from("suppliers").select("id,name,phone,email,address").eq("business_id",businessId).order("name"),
-        (branchId ? supabase.from("purchase_orders").select("id,purchase_no,status,total,created_at,suppliers(name),purchase_items(quantity)").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("purchase_orders").select("id,purchase_no,status,total,created_at,suppliers(name),purchase_items(quantity)").eq("business_id",businessId)).order("created_at",{ascending:false}).limit(100),
+        (branchId ? supabase.from("purchase_orders").select("id,purchase_no,status,total,amount_paid,due_date,supplier_invoice_no,created_at,supplier_id,suppliers(name),purchase_items(quantity)").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("purchase_orders").select("id,purchase_no,status,total,amount_paid,due_date,supplier_invoice_no,created_at,supplier_id,suppliers(name),purchase_items(quantity)").eq("business_id",businessId)).order("created_at",{ascending:false}).limit(100),
+        (branchId ? supabase.from("supplier_payments").select("id,purchase_id,supplier_id,amount,payment_method,reference_no,notes,created_at").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("supplier_payments").select("id,purchase_id,supplier_id,amount,payment_method,reference_no,notes,created_at").eq("business_id",businessId)).order("created_at",{ascending:false}).limit(300),
         (branchId ? supabase.from("cash_entries").select("id,entry_type,category,description,amount,created_at,reference_type").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("cash_entries").select("id,entry_type,category,description,amount,created_at,reference_type").eq("business_id",businessId)).order("created_at",{ascending:false}).limit(200),
         supabase.from("membership_tiers").select("id,business_id,tier_code,tier_name,min_transactions,min_spend,discount_percent,is_active").eq("business_id",businessId).order("tier_code"),
         supabase.from("warranties").select("id,business_id,sale_id,sale_item_id,customer_id,product_name,invoice_no,warranty_code,purchase_date,expires_at,quantity,purchase_value,coverage_percent,max_coverage_amount,min_claim_amount,max_claims,claims_used,terms").eq("business_id",businessId).order("created_at",{ascending:false}).limit(500),
         supabase.from("warranty_claims").select("id,business_id,warranty_id,claim_no,claim_description,coverage_value,status,created_at,processed_at,resolution_notes").eq("business_id",businessId).order("created_at",{ascending:false}).limit(500)
       ]);
-      for(const result of [bizRes,branchRes,warehouseRes,productRes,inventoryRes,categoryRes,customerRes,salesRes,suppliersRes,purchasesRes,cashRes,tiersRes,warrantiesRes,claimsRes]) if(result.error) throw result.error;
+      for(const result of [bizRes,branchRes,warehouseRes,productRes,inventoryRes,categoryRes,customerRes,salesRes,suppliersRes,purchasesRes,paymentsRes,cashRes,tiersRes,warrantiesRes,claimsRes]) if(result.error) throw result.error;
       // Owner/Admin may switch across active branches. Other roles remain
       // restricted to the branch assigned to their membership.
       const accessibleBranches = ["owner","admin"].includes(member.role)
@@ -142,7 +145,7 @@ export default function App() {
       setBranchId(activeBranch?.id||""); setWarehouseId(activeWarehouse?.id||"");
       setProducts(productRes.data.map(p=>({...p,category:categoryMap[p.category_id]||"Umum",stock:stockMap[p.id]||0,price:Number(p.selling_price),cost:Number(p.cost_price),min:Number(p.min_stock),discountType:p.discount_type||"none",discountValue:Number(p.discount_value)||0})));
       setCustomers(customerRes.data); setSales(salesRes.data); setMembershipTiers(tiersRes.data||[]);
-      setSuppliers(suppliersRes.data); setPurchases(purchasesRes.data); setCashEntries(cashRes.data||[]); setWarranties(warrantiesRes.data||[]); setWarrantyClaims(claimsRes.data||[]);
+      setSuppliers(suppliersRes.data); setPurchases(purchasesRes.data); setSupplierPayments(paymentsRes.data||[]); setCashEntries(cashRes.data||[]); setWarranties(warrantiesRes.data||[]); setWarrantyClaims(claimsRes.data||[]);
     } catch(e) { setError(e.message||"Gagal memuat data toko."); }
     finally { setBusy(false); }
   },[session,branchId,warehouseId]);
@@ -280,11 +283,30 @@ export default function App() {
       p_business_id:business.id,p_branch_id:branchId,p_warehouse_id:warehouseId,
       p_supplier_id:purchaseForm.supplier_id||null,
       p_items:purchaseCart.map(item=>({product_id:item.product_id,quantity:item.quantity,unit_cost:item.unit_cost})),
-      p_notes:purchaseForm.notes||null
+      p_notes:purchaseForm.notes||null,p_supplier_invoice_no:purchaseForm.supplier_invoice_no||null,
+      p_due_date:purchaseForm.due_date||null,p_initial_payment:Number(purchaseForm.initial_payment)||0,
+      p_payment_method:purchaseForm.payment_method,p_payment_reference:purchaseForm.payment_reference||null
     });
     setBusy(false);if(saveError){setError(saveError.message);return;}
-    setPurchaseCart([]);setPurchaseForm({supplier_id:"",notes:"",product_id:"",quantity:"1",unit_cost:""});
+    setPurchaseCart([]);setPurchaseForm({supplier_id:"",notes:"",product_id:"",quantity:"1",unit_cost:"",supplier_invoice_no:"",due_date:"",initial_payment:"0",payment_method:"Tunai",payment_reference:""});
     setNotice("Pembelian "+(data?.[0]?.purchase_no||"")+" diterima; stok gudang bertambah.");await loadData();
+  }
+
+
+  async function paySupplierInvoice(purchase){
+    const draft=paymentDrafts[purchase.id]||{};
+    const amount=Number(draft.amount)||0;
+    if(amount<=0){setError("Masukkan nominal pembayaran lebih dari nol.");return;}
+    setBusy(true);setError("");
+    const {data,error:payError}=await supabase.rpc("record_supplier_payment",{
+      p_purchase_id:purchase.id,p_amount:amount,p_payment_method:draft.method||"Tunai",
+      p_reference_no:draft.reference||null,p_notes:draft.notes||null
+    });
+    setBusy(false);
+    if(payError){setError(payError.message);return;}
+    setNotice("Pembayaran supplier berhasil dicatat. Sisa hutang "+money(data?.[0]?.remaining_balance||0)+".");
+    setPaymentDrafts(old=>({...old,[purchase.id]:undefined}));
+    await loadData();
   }
 
   const card=(label,value,sub,icon)=><div className="stat"><span className="stat-icon">{icon}</span><div><small>{label}</small><strong>{value}</strong><span className="muted">{sub}</span></div></div>;
@@ -332,10 +354,10 @@ export default function App() {
           {showSupplierForm&&<form className="panel form-grid" onSubmit={saveSupplier}><label>Nama pemasok<input required value={supplierForm.name} onChange={e=>setSupplierForm({...supplierForm,name:e.target.value})}/></label><label>Nomor telepon<input value={supplierForm.phone} onChange={e=>setSupplierForm({...supplierForm,phone:e.target.value})}/></label><label>Email<input type="email" value={supplierForm.email} onChange={e=>setSupplierForm({...supplierForm,email:e.target.value})}/></label><label>Alamat<input value={supplierForm.address} onChange={e=>setSupplierForm({...supplierForm,address:e.target.value})}/></label><div className="form-actions"><button className="primary" disabled={busy}>Simpan pemasok</button><button type="button" className="secondary" onClick={()=>setShowSupplierForm(false)}>Batal</button></div></form>}
           <section className="panel"><div className="table-wrap"><table><thead><tr><th>NAMA PEMASOK</th><th>TELEPON</th><th>EMAIL</th><th>ALAMAT</th></tr></thead><tbody>{suppliers.map(s=><tr key={s.id}><td><b>{s.name}</b></td><td>{s.phone||"—"}</td><td>{s.email||"—"}</td><td>{s.address||"—"}</td></tr>)}</tbody></table></div>{suppliers.length===0&&<div className="empty">Belum ada data pemasok.</div>}</section></>}
         {page==="Pembelian"&&<><div className="welcome"><div><span className="eyebrow">PENGADAAN STOK</span><h1>Pembelian barang</h1><p>Penerimaan barang menambah stok dan mencatat riwayat mutasi secara bersamaan.</p></div></div>
-          <section className="panel purchase-panel"><h3>Catat penerimaan pembelian</h3><div className="form-grid"><label>Pemasok<select value={purchaseForm.supplier_id} onChange={e=>setPurchaseForm({...purchaseForm,supplier_id:e.target.value})}><option value="">Pilih pemasok (opsional)</option>{suppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></label><label>Catatan<input value={purchaseForm.notes} onChange={e=>setPurchaseForm({...purchaseForm,notes:e.target.value})} placeholder="Nomor nota atau catatan"/></label><label>Produk<select value={purchaseForm.product_id} onChange={e=>{const p=products.find(x=>x.id===e.target.value);setPurchaseForm({...purchaseForm,product_id:e.target.value,unit_cost:p?String(p.cost):""});}}><option value="">Pilih produk</option>{products.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label><label>Jumlah<input type="number" min="0.001" step="0.001" value={purchaseForm.quantity} onChange={e=>setPurchaseForm({...purchaseForm,quantity:e.target.value})}/></label><label>Harga modal per unit<input type="number" min="0" value={purchaseForm.unit_cost} onChange={e=>setPurchaseForm({...purchaseForm,unit_cost:e.target.value})}/></label><div className="form-actions"><button type="button" className="secondary" onClick={addPurchaseItem}>＋ Tambahkan barang</button></div></div>
+          <section className="panel purchase-panel"><h3>Catat penerimaan pembelian</h3><div className="form-grid"><label>Pemasok<select value={purchaseForm.supplier_id} onChange={e=>setPurchaseForm({...purchaseForm,supplier_id:e.target.value})}><option value="">Pilih pemasok (opsional)</option>{suppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></label><label>Nomor invoice supplier<input value={purchaseForm.supplier_invoice_no} onChange={e=>setPurchaseForm({...purchaseForm,supplier_invoice_no:e.target.value})} placeholder="Nomor nota supplier"/></label><label>Jatuh tempo<input type="date" min={new Date().toISOString().slice(0,10)} value={purchaseForm.due_date} onChange={e=>setPurchaseForm({...purchaseForm,due_date:e.target.value})}/></label><label>Pembayaran awal (Rp)<input type="number" min="0" value={purchaseForm.initial_payment} onChange={e=>setPurchaseForm({...purchaseForm,initial_payment:e.target.value})}/></label><label>Metode pembayaran<select value={purchaseForm.payment_method} onChange={e=>setPurchaseForm({...purchaseForm,payment_method:e.target.value})}>{["Tunai","Transfer bank","QRIS","Debit"].map(x=><option key={x}>{x}</option>)}</select></label><label>Referensi pembayaran<input value={purchaseForm.payment_reference} onChange={e=>setPurchaseForm({...purchaseForm,payment_reference:e.target.value})} placeholder="Nomor transfer (opsional)"/></label><label>Catatan<input value={purchaseForm.notes} onChange={e=>setPurchaseForm({...purchaseForm,notes:e.target.value})} placeholder="Catatan pembelian"/></label><label>Produk<select value={purchaseForm.product_id} onChange={e=>{const p=products.find(x=>x.id===e.target.value);setPurchaseForm({...purchaseForm,product_id:e.target.value,unit_cost:p?String(p.cost):""});}}><option value="">Pilih produk</option>{products.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label><label>Jumlah<input type="number" min="0.001" step="0.001" value={purchaseForm.quantity} onChange={e=>setPurchaseForm({...purchaseForm,quantity:e.target.value})}/></label><label>Harga modal per unit<input type="number" min="0" value={purchaseForm.unit_cost} onChange={e=>setPurchaseForm({...purchaseForm,unit_cost:e.target.value})}/></label><div className="form-actions"><button type="button" className="secondary" onClick={addPurchaseItem}>＋ Tambahkan barang</button></div></div>
             {purchaseCart.length>0&&<><div className="table-wrap"><table><thead><tr><th>PRODUK</th><th>JUMLAH</th><th>HARGA MODAL</th><th>SUBTOTAL</th><th></th></tr></thead><tbody>{purchaseCart.map(item=><tr key={item.product_id}><td>{item.name}</td><td>{item.quantity}</td><td>{money(item.unit_cost)}</td><td>{money(item.quantity*item.unit_cost)}</td><td><button className="text-btn" onClick={()=>setPurchaseCart(old=>old.filter(x=>x.product_id!==item.product_id))}>Hapus</button></td></tr>)}</tbody></table></div><div className="total-line"><span>Total pembelian</span><strong>{money(purchaseCart.reduce((a,x)=>a+x.quantity*x.unit_cost,0))}</strong></div><button className="primary" disabled={busy} onClick={savePurchase}>Simpan penerimaan dan tambah stok</button></>}
           </section>
-          <section className="panel"><div className="panel-head"><div><h3>Riwayat pembelian</h3><p>100 transaksi pembelian terakhir</p></div></div><div className="table-wrap"><table><thead><tr><th>NOMOR</th><th>PEMASOK</th><th>TANGGAL</th><th>STATUS</th><th>TOTAL</th></tr></thead><tbody>{purchases.map(p=><tr key={p.id}><td>{p.purchase_no}</td><td>{p.suppliers?.name||"—"}</td><td>{new Date(p.created_at).toLocaleString("id-ID")}</td><td><span className="badge green">{p.status}</span></td><td>{money(p.total)}</td></tr>)}</tbody></table></div>{purchases.length===0&&<div className="empty">Belum ada riwayat pembelian.</div>}</section></>}
+          <section className="panel"><div className="panel-head"><div><h3>Riwayat pembelian</h3><p>100 transaksi pembelian terakhir</p></div></div><div className="table-wrap"><table><thead><tr><th>NOMOR / INVOICE</th><th>PEMASOK</th><th>TANGGAL</th><th>JATUH TEMPO</th><th>TOTAL</th><th>DIBAYAR</th><th>SISA HUTANG</th><th>AKSI</th></tr></thead><tbody>{purchases.map(p=>{const paid=Number(p.amount_paid)||0;const balance=Math.max(0,Number(p.total)-paid);const overdue=balance>0&&p.due_date&&new Date(p.due_date+"T23:59:59")<new Date();const draft=paymentDrafts[p.id];return <React.Fragment key={p.id}><tr><td><b>{p.purchase_no}</b><small>{p.supplier_invoice_no||"Tanpa nomor invoice"}</small></td><td>{p.suppliers?.name||"—"}</td><td>{new Date(p.created_at).toLocaleString("id-ID")}</td><td>{p.due_date?new Date(p.due_date+"T00:00:00").toLocaleDateString("id-ID"):"—"}{overdue&&<small className="danger-text">Terlambat</small>}</td><td>{money(p.total)}</td><td>{money(paid)}</td><td><b className={balance>0?"danger-text":"text-safe"}>{money(balance)}</b><small>{balance<=0?"Lunas":overdue?"Jatuh tempo lewat":"Belum lunas"}</small></td><td>{balance>0&&p.supplier_id?<button className="text-btn" onClick={()=>setPaymentDrafts(old=>({...old,[p.id]:old[p.id]?undefined:{amount:String(balance),method:"Tunai",reference:"",notes:""}}))}>Bayar</button>:"—"}</td></tr>{draft&&<tr><td colSpan="8"><div className="payment-inline"><b>Catat pembayaran · {p.purchase_no}</b><div className="form-grid"><label>Nominal pembayaran<input type="number" min="1" max={balance} value={draft.amount} onChange={e=>setPaymentDrafts(old=>({...old,[p.id]:{...draft,amount:e.target.value}}))}/></label><label>Metode<select value={draft.method} onChange={e=>setPaymentDrafts(old=>({...old,[p.id]:{...draft,method:e.target.value}}))}>{["Tunai","Transfer bank","QRIS","Debit"].map(x=><option key={x}>{x}</option>)}</select></label><label>Referensi<input value={draft.reference} onChange={e=>setPaymentDrafts(old=>({...old,[p.id]:{...draft,reference:e.target.value}}))} placeholder="Nomor bukti transfer"/></label><label>Catatan<input value={draft.notes} onChange={e=>setPaymentDrafts(old=>({...old,[p.id]:{...draft,notes:e.target.value}}))} placeholder="Catatan"/></label></div><div className="form-actions"><button className="primary" disabled={busy} onClick={()=>paySupplierInvoice(p)}>Simpan pembayaran</button><button className="secondary" onClick={()=>setPaymentDrafts(old=>({...old,[p.id]:undefined}))}>Batal</button></div></div></td></tr>}</React.Fragment>})}</tbody></table></div>{purchases.length===0&&<div className="empty">Belum ada riwayat pembelian.</div>}</section></>}
 
         {page==="Garansi"&&<><div className="welcome"><div><span className="eyebrow">WARRANTY MANAGEMENT</span><h1>Garansi & Klaim</h1><p>Garansi dibuat otomatis dari barang terjual yang memiliki masa garansi aktif.</p></div><button className="secondary" onClick={loadData}>↻ Segarkan</button></div>
           <div className="stats">{card("Garansi tercatat",warranties.length,"Maks. 500 data terbaru","✓")}{card("Masih berlaku",warranties.filter(w=>new Date(w.expires_at)>=new Date()).length,"Berdasarkan tanggal kedaluwarsa","◷")}{card("Klaim menunggu",warrantyClaims.filter(x=>x.status==="submitted").length,"Perlu pemeriksaan Owner","!")}{card("Klaim disetujui",warrantyClaims.filter(x=>x.status==="approved"||x.status==="used").length,"Riwayat perlindungan","▣")}</div>
