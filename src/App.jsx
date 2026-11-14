@@ -83,13 +83,21 @@ export default function App() {
         supabase.from("inventory").select("product_id,warehouse_id,quantity").eq("business_id",businessId),
         supabase.from("categories").select("id,name").eq("business_id",businessId).order("name"),
         supabase.from("customers").select("id,name,phone,email,address").eq("business_id",businessId).order("name"),
-        supabase.from("sales").select("id,invoice_no,status,total,created_at,customer_id,sale_items(quantity)").eq("business_id",businessId).order("created_at",{ascending:false}).limit(100),
+        (branchId ? supabase.from("sales").select("id,invoice_no,status,total,created_at,customer_id,sale_items(quantity)").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("sales").select("id,invoice_no,status,total,created_at,customer_id,sale_items(quantity)").eq("business_id",businessId)).order("created_at",{ascending:false}).limit(100),
         supabase.from("suppliers").select("id,name,phone,email,address").eq("business_id",businessId).order("name"),
-        supabase.from("purchase_orders").select("id,purchase_no,status,total,created_at,suppliers(name),purchase_items(quantity)").eq("business_id",businessId).order("created_at",{ascending:false}).limit(100)
+        (branchId ? supabase.from("purchase_orders").select("id,purchase_no,status,total,created_at,suppliers(name),purchase_items(quantity)").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("purchase_orders").select("id,purchase_no,status,total,created_at,suppliers(name),purchase_items(quantity)").eq("business_id",businessId)).order("created_at",{ascending:false}).limit(100)
       ]);
       for(const result of [bizRes,branchRes,warehouseRes,productRes,inventoryRes,categoryRes,customerRes,salesRes,suppliersRes,purchasesRes]) if(result.error) throw result.error;
-      const activeBranch = branchRes.data.find(b=>b.id===member.branch_id) || branchRes.data[0];
-      const activeWarehouse = warehouseRes.data.find(w=>w.branch_id===activeBranch?.id) || warehouseRes.data[0];
+      // Owner/Admin may switch across active branches. Other roles remain
+      // restricted to the branch assigned to their membership.
+      const accessibleBranches = ["owner","admin"].includes(member.role)
+        ? branchRes.data
+        : branchRes.data.filter(b=>b.id===member.branch_id);
+      const activeBranch = accessibleBranches.find(b=>b.id===branchId)
+        || accessibleBranches.find(b=>b.id===member.branch_id)
+        || accessibleBranches[0];
+      const branchWarehouses = warehouseRes.data.filter(w=>w.branch_id===activeBranch?.id);
+      const activeWarehouse = branchWarehouses.find(w=>w.id===warehouseId) || branchWarehouses[0];
       const categoryMap = Object.fromEntries(categoryRes.data.map(c=>[c.id,c.name]));
       // Show stock for the selected operating warehouse only; never combine stock
       // from separate branches/warehouses into one sellable quantity.
@@ -99,14 +107,14 @@ export default function App() {
           stockMap[row.product_id] = Number(row.quantity || 0);
         }
       }
-      setBusiness(bizRes.data); setMembership(member); setBranches(branchRes.data); setWarehouses(warehouseRes.data);
+      setBusiness(bizRes.data); setMembership(member); setBranches(accessibleBranches); setWarehouses(warehouseRes.data);
       setBranchId(activeBranch?.id||""); setWarehouseId(activeWarehouse?.id||"");
       setProducts(productRes.data.map(p=>({...p,category:categoryMap[p.category_id]||"Umum",stock:stockMap[p.id]||0,price:Number(p.selling_price),cost:Number(p.cost_price),min:Number(p.min_stock)})));
       setCustomers(customerRes.data); setSales(salesRes.data);
       setSuppliers(suppliersRes.data); setPurchases(purchasesRes.data);
     } catch(e) { setError(e.message||"Gagal memuat data toko."); }
     finally { setBusy(false); }
-  },[session]);
+  },[session,branchId,warehouseId]);
 
   useEffect(()=>{ if(session) loadData(); },[session,loadData]);
 
@@ -206,7 +214,10 @@ export default function App() {
     </aside>
     <main className="main-area">
       <header className="topbar"><div><b>{page}</b><small>{business?.name||"Jatibarang Helmet"} · {branches.find(b=>b.id===branchId)?.name||"Cabang"}</small></div>
-        <div className="top-right"><span className="online"><i/> Sinkronisasi cloud</span><div className="avatar">{(session.user.email||"JH").slice(0,2).toUpperCase()}</div><button className="secondary" onClick={logout}>Keluar</button></div>
+        <div className="top-right"><div className="location-controls">
+          {branches.length>1&&<label><span>Cabang</span><select aria-label="Pilih cabang" value={branchId} onChange={e=>{setBranchId(e.target.value);setWarehouseId("");}}>{branches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></label>}
+          {warehouses.filter(w=>w.branch_id===branchId).length>1&&<label><span>Gudang</span><select aria-label="Pilih gudang" value={warehouseId} onChange={e=>setWarehouseId(e.target.value)}>{warehouses.filter(w=>w.branch_id===branchId).map(w=><option key={w.id} value={w.id}>{w.name}</option>)}</select></label>}
+        </div><span className="online"><i/> Sinkronisasi cloud</span><div className="avatar">{(session.user.email||"JH").slice(0,2).toUpperCase()}</div><button className="secondary" onClick={logout}>Keluar</button></div>
       </header>
       <div className="content">
         {notice&&<div className="notice">{notice}<button onClick={()=>setNotice("")}>×</button></div>}
