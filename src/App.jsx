@@ -75,7 +75,9 @@ export default function App() {
   const [attendanceRows,setAttendanceRows] = useState([]);
   const [cashSessions,setCashSessions] = useState([]);
   const [staffMembers,setStaffMembers] = useState([]);
-  const [staffDraft,setStaffDraft] = useState({user_id:"",employee_code:"",full_name:"",phone:"",job_title:"",branch_id:"",role:"cashier",is_active:true});
+  const [commissionLedger,setCommissionLedger] = useState([]);
+  const [commissionRules,setCommissionRules] = useState([]);
+  const [staffDraft,setStaffDraft] = useState({user_id:"",employee_code:"",full_name:"",phone:"",job_title:"",branch_id:"",role:"cashier",is_active:true,commission_type:"percent",commission_value:"0"});
   const [stockOpnames,setStockOpnames] = useState([]);
   const [stockCountDraft,setStockCountDraft] = useState({});
   const [opnameNotes,setOpnameNotes] = useState("");
@@ -146,11 +148,15 @@ export default function App() {
       if (["owner","admin"].includes(member.role)) {
         const [membersRes,profilesRes] = await Promise.all([
           supabase.from("business_members").select("user_id,branch_id,role,is_active,created_at").eq("business_id",businessId).order("created_at"),
-          supabase.from("staff_profiles").select("user_id,branch_id,employee_code,full_name,phone,job_title").eq("business_id",businessId)
+          supabase.from("staff_profiles").select("user_id,branch_id,employee_code,full_name,phone,job_title,commission_type,commission_value").eq("business_id",businessId)
         ]);
         if(membersRes.error) throw membersRes.error;
         if(profilesRes.error) throw profilesRes.error;
         const profileMap = Object.fromEntries((profilesRes.data||[]).map(p=>[p.user_id,p]));
+        const [commissionRes,ledgerRes] = await Promise.all([supabase.from("commission_rules").select("id,business_id,branch_id,product_id,commission_type,commission_value,is_active").eq("business_id",businessId),supabase.from("commission_ledger").select("id,business_id,branch_id,sale_id,sale_item_id,staff_user_id,product_name,quantity,commission_base,commission_amount,status,created_at").eq("business_id",businessId).order("created_at",{ascending:false}).limit(500)]);
+        if(commissionRes.error) throw commissionRes.error;
+        if(ledgerRes.error) throw ledgerRes.error;
+        setCommissionRules(commissionRes.data||[]); setCommissionLedger(ledgerRes.data||[]);
         staffMembersData = (membersRes.data||[]).map(m=>({...m,profile:profileMap[m.user_id]||null}));
       }
       // Owner/Admin may switch across active branches. Other roles remain
@@ -231,16 +237,16 @@ export default function App() {
 
   function editStaffMember(row){
     const p=row.profile||{};
-    setStaffDraft({user_id:row.user_id,employee_code:p.employee_code||"",full_name:p.full_name||"",phone:p.phone||"",job_title:p.job_title||"",branch_id:row.branch_id||p.branch_id||branchId,role:row.role==="owner"?"cashier":row.role,is_active:Boolean(row.is_active)});
+    setStaffDraft({user_id:row.user_id,employee_code:p.employee_code||"",full_name:p.full_name||"",phone:p.phone||"",job_title:p.job_title||"",branch_id:row.branch_id||p.branch_id||branchId,role:row.role==="owner"?"cashier":row.role,is_active:Boolean(row.is_active),commission_type:p.commission_type||"percent",commission_value:String(p.commission_value??0)});
   }
   async function saveStaffProfile(e){
     e.preventDefault();
     if(!staffDraft.user_id){setError("Pilih akun karyawan yang sudah terdaftar.");return;}
     setBusy(true);setError("");
-    const {error:e2}=await supabase.rpc("save_staff_profile",{p_user_id:staffDraft.user_id,p_branch_id:staffDraft.branch_id,p_employee_code:staffDraft.employee_code,p_full_name:staffDraft.full_name,p_phone:staffDraft.phone||null,p_job_title:staffDraft.job_title||null,p_role:staffDraft.role,p_is_active:staffDraft.is_active});
+    const {error:e2}=await supabase.rpc("save_staff_profile",{p_user_id:staffDraft.user_id,p_branch_id:staffDraft.branch_id,p_employee_code:staffDraft.employee_code,p_full_name:staffDraft.full_name,p_phone:staffDraft.phone||null,p_job_title:staffDraft.job_title||null,p_role:staffDraft.role,p_is_active:staffDraft.is_active,p_commission_type:staffDraft.commission_type,p_commission_value:Number(staffDraft.commission_value)||0});
     setBusy(false);if(e2){setError(e2.message);return;}
     setNotice("Profil dan hak akses karyawan berhasil disimpan.");
-    setStaffDraft({user_id:"",employee_code:"",full_name:"",phone:"",job_title:"",branch_id:branchId,role:"cashier",is_active:true});
+    setStaffDraft({user_id:"",employee_code:"",full_name:"",phone:"",job_title:"",branch_id:branchId,role:"cashier",is_active:true,commission_type:"percent",commission_value:"0"});
     await loadData();
   }
 
@@ -543,11 +549,14 @@ export default function App() {
               <label>Jabatan<input maxLength="80" value={staffDraft.job_title} onChange={e=>setStaffDraft({...staffDraft,job_title:e.target.value})} placeholder="Contoh: Kasir / Gudang"/></label>
               <label>Cabang<select required value={staffDraft.branch_id||branchId} onChange={e=>setStaffDraft({...staffDraft,branch_id:e.target.value})}>{branches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></label>
               <label>Peran akses<select value={staffDraft.role} onChange={e=>setStaffDraft({...staffDraft,role:e.target.value})}>{(membership?.role==="owner"?["admin","manager","cashier","staff"]:["manager","cashier","staff"]).map(r=><option key={r} value={r}>{({admin:"Admin",manager:"Manager",cashier:"Kasir",staff:"Staf"})[r]}</option>)}</select></label>
+              <label>Jenis komisi<select value={staffDraft.commission_type} onChange={e=>setStaffDraft({...staffDraft,commission_type:e.target.value})}><option value="percent">Persentase omzet bersih</option><option value="per_unit">Nominal per unit</option><option value="none">Tanpa komisi</option></select></label>
+              <label>Nilai komisi {staffDraft.commission_type==="percent"?"(%)":staffDraft.commission_type==="per_unit"?"(Rp/unit)":"(0)"}<input type="number" min="0" step={staffDraft.commission_type==="percent"?"0.01":"1"} value={staffDraft.commission_value} onChange={e=>setStaffDraft({...staffDraft,commission_value:e.target.value})} disabled={staffDraft.commission_type==="none"}/></label>
               <label className="checkbox-label"><input type="checkbox" checked={staffDraft.is_active} onChange={e=>setStaffDraft({...staffDraft,is_active:e.target.checked})}/> Akun aktif</label>
-              <div className="form-actions"><button className="primary" disabled={busy||!staffDraft.user_id}>Simpan profil & akses</button><button type="button" className="secondary" onClick={()=>setStaffDraft({user_id:"",employee_code:"",full_name:"",phone:"",job_title:"",branch_id:branchId,role:"cashier",is_active:true})}>Kosongkan form</button></div>
+              <div className="form-actions"><button className="primary" disabled={busy||!staffDraft.user_id}>Simpan profil & akses</button><button type="button" className="secondary" onClick={()=>setStaffDraft({user_id:"",employee_code:"",full_name:"",phone:"",job_title:"",branch_id:branchId,role:"cashier",is_active:true,commission_type:"percent",commission_value:"0"})}>Kosongkan form</button></div>
             </form>
-            <div className="table-wrap"><table><thead><tr><th>KODE</th><th>NAMA / ID AKUN</th><th>JABATAN</th><th>CABANG</th><th>PERAN</th><th>STATUS</th><th>AKSI</th></tr></thead><tbody>{staffMembers.map(m=><tr key={m.user_id}><td>{m.profile?.employee_code||"—"}</td><td>{m.profile?.full_name||"Akun "+m.user_id.slice(0,8)+"…"}<small className="muted">{m.user_id.slice(0,18)}…</small></td><td>{m.profile?.job_title||"—"}</td><td>{branches.find(b=>b.id===m.branch_id)?.name||"—"}</td><td>{m.role}</td><td><span className={"badge "+(m.is_active?"green":"red")}>{m.is_active?"Aktif":"Nonaktif"}</span></td><td>{m.role==="owner"?<span className="muted">Dilindungi</span>:<button type="button" className="text-btn" onClick={()=>editStaffMember(m)}>Edit</button>}</td></tr>)}</tbody></table></div>{staffMembers.length===0&&<div className="empty">Belum ada anggota bisnis selain akun saat ini.</div>}
+            <div className="table-wrap"><table><thead><tr><th>KODE</th><th>NAMA / ID AKUN</th><th>JABATAN</th><th>CABANG</th><th>PERAN</th><th>ATURAN KOMISI</th><th>STATUS</th><th>AKSI</th></tr></thead><tbody>{staffMembers.map(m=><tr key={m.user_id}><td>{m.profile?.employee_code||"—"}</td><td>{m.profile?.full_name||"Akun "+m.user_id.slice(0,8)+"…"}<small className="muted">{m.user_id.slice(0,18)}…</small></td><td>{m.profile?.job_title||"—"}</td><td>{branches.find(b=>b.id===m.branch_id)?.name||"—"}</td><td>{m.role}</td><td>{m.profile?.commission_type==="percent"?(Number(m.profile.commission_value)||0)+"%":m.profile?.commission_type==="per_unit"?money(m.profile.commission_value)+"/unit":"Tidak ada"}</td><td><span className={"badge "+(m.is_active?"green":"red")}>{m.is_active?"Aktif":"Nonaktif"}</span></td><td>{m.role==="owner"?<span className="muted">Dilindungi</span>:<button type="button" className="text-btn" onClick={()=>editStaffMember(m)}>Edit</button>}</td></tr>)}</tbody></table></div>{staffMembers.length===0&&<div className="empty">Belum ada anggota bisnis selain akun saat ini.</div>}
           </section>:<div className="panel"><div className="notice">Pengelolaan profil dan hak akses hanya tersedia untuk Owner/Admin. Anda tetap dapat melakukan absensi dan mengelola shift sendiri.</div></div>}
+          {["owner","admin","manager"].includes(membership?.role)&&<section className="panel"><div className="panel-head"><div><h3>Komisi karyawan</h3><p>Komisi dibuat otomatis saat transaksi berubah menjadi lunas. Dasar hitung dialokasikan proporsional setelah diskon transaksi.</p></div></div><div className="stats">{card("Komisi tertunda",money(commissionLedger.filter(x=>x.status==="pending").reduce((s,x)=>s+Number(x.commission_amount),0)),"Belum dibayar","Rp")}{card("Sudah dibayar",money(commissionLedger.filter(x=>x.status==="paid").reduce((s,x)=>s+Number(x.commission_amount),0)),"Riwayat ledger","✓")}{card("Baris komisi",commissionLedger.length,"Maks. 500 catatan","▤")}</div><div className="table-wrap"><table><thead><tr><th>TANGGAL</th><th>STAFF</th><th>PRODUK</th><th>QTY</th><th>DASAR KOMISI</th><th>KOMISI</th><th>STATUS</th></tr></thead><tbody>{commissionLedger.map(x=><tr key={x.id}><td>{new Date(x.created_at).toLocaleString("id-ID")}</td><td>{staffMembers.find(m=>m.user_id===x.staff_user_id)?.profile?.full_name||x.staff_user_id.slice(0,8)+"…"}</td><td>{x.product_name}</td><td>{x.quantity}</td><td>{money(x.commission_base)}</td><td className="amount">{money(x.commission_amount)}</td><td><span className={"badge "+(x.status==="paid"?"green":"yellow")}>{x.status==="paid"?"Dibayar":"Tertunda"}</span></td></tr>)}</tbody></table></div>{commissionLedger.length===0&&<div className="empty">Belum ada komisi. Komisi akan tercatat untuk transaksi lunas karyawan yang memiliki profil komisi aktif.</div>}</section>}
           <div className="stats">{card("Absensi hari ini",attendanceRows.filter(a=>a.work_date===new Date().toLocaleDateString("en-CA",{timeZone:"Asia/Jakarta"})).length,"Catatan pada cabang aktif","◷")}{card("Shift terbuka",cashSessions.filter(s=>s.status==="open").length,"Kasir yang belum tutup shift","▣")}{card("Shift ditutup",cashSessions.filter(s=>s.status==="closed").length,"Riwayat 100 shift terbaru","✓")}{card("Selisih kas tercatat",money(cashSessions.filter(s=>s.status==="closed").reduce((sum,s)=>sum+Number(s.cash_difference||0),0)),"Akumulasi pada daftar terbaru","Rp")}</div>
           <section className="panel"><div className="panel-head"><div><h3>Absensi saya</h3><p>Jam masuk dan pulang tercatat berdasarkan akun login.</p></div></div>
             {(()=>{const today=new Date().toLocaleDateString("en-CA",{timeZone:"Asia/Jakarta"});const mine=attendanceRows.find(a=>a.user_id===session.user.id&&a.work_date===today);return <><div className="setting-row"><span>Status hari ini</span><b className={mine?.clock_out_at?"badge green":mine?"badge yellow":"badge"}>{mine?.clock_out_at?"Sudah pulang":mine?"Sedang bekerja":"Belum absen"}</b></div><div className="setting-row"><span>Jam masuk</span><b>{mine?.clock_in_at?new Date(mine.clock_in_at).toLocaleString("id-ID"):"—"}</b></div><div className="setting-row"><span>Jam pulang</span><b>{mine?.clock_out_at?new Date(mine.clock_out_at).toLocaleString("id-ID"):"—"}</b></div><label>Catatan (opsional)<input value={shiftNote} maxLength="500" onChange={e=>setShiftNote(e.target.value)} placeholder="Contoh: mulai shift pagi"/></label><div className="form-actions"><button className="primary" disabled={busy||Boolean(mine)} onClick={()=>recordAttendance("clock_in")}>Absen masuk</button><button className="secondary" disabled={busy||!mine||Boolean(mine.clock_out_at)} onClick={()=>recordAttendance("clock_out")}>Absen pulang</button></div></>;})()}
