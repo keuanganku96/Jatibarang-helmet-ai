@@ -115,7 +115,11 @@ Deno.serve(async (req: Request) => {
       if (!validUuid(business_id) || !validUuid(device_id)) return json({ error: "Perangkat belum dikenali." }, 400);
       const { data: device } = await admin.from("staff_devices").select("device_id,business_id,branch_id").eq("device_id", device_id).eq("business_id", business_id).is("revoked_at", null).maybeSingle();
       if (!device) return json({ error: "Perangkat belum disetujui Owner." }, 403);
-      const { data, error } = await admin.from("staff_profiles").select("id,employee_code,full_name,job_title,branch_id").eq("business_id", business_id).eq("branch_id", device.branch_id).order("full_name");
+      const { data: activeMembers, error: memberError } = await admin.from("business_members").select("user_id").eq("business_id", business_id).eq("branch_id", device.branch_id).eq("is_active", true);
+      if (memberError) throw memberError;
+      const activeIds = (activeMembers ?? []).map((m: {user_id:string}) => m.user_id);
+      if (!activeIds.length) return json({ ok: true, staff: [], branch_id: device.branch_id });
+      const { data, error } = await admin.from("staff_profiles").select("id,employee_code,full_name,job_title,branch_id").eq("business_id", business_id).eq("branch_id", device.branch_id).in("user_id", activeIds).order("full_name");
       if (error) throw error;
       return json({ ok: true, staff: data ?? [], branch_id: device.branch_id });
     }
@@ -133,6 +137,9 @@ Deno.serve(async (req: Request) => {
       const { data: credential } = await admin.from("staff_pin_credentials").select("pin_hash,failed_attempts,locked_until").eq("staff_profile_id", profile.id).maybeSingle();
       if (!credential) return json({ error: "PIN belum diatur oleh Owner." }, 403);
       if (credential.locked_until && new Date(credential.locked_until) > new Date()) return json({ error: "PIN terkunci sementara. Hubungi Owner atau tunggu 10 menit." }, 429);
+      if (credential.locked_until && new Date(credential.locked_until) <= new Date()) {
+        await admin.rpc("reset_staff_pin_failures", { p_staff_profile_id: profile.id });
+      }
       if (!(await verifyPin(String(pin), credential.pin_hash))) {
         const { data: failures } = await admin.rpc("record_staff_pin_failure", { p_staff_profile_id: profile.id });
         await admin.from("staff_pin_audit").insert({ business_id, staff_profile_id: profile.id, device_id, event_type: "login_failed", details: { employee_code: code } });
