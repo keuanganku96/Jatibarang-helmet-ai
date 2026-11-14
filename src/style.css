@@ -16,3 +16,17 @@
 .location-controls label{display:grid;gap:3px;font-size:9px;color:#8994a5;font-weight:700}
 .location-controls select{width:auto;min-width:92px;max-width:145px;padding:7px 9px;font-size:11px}
 @media(max-width:760px){.location-controls{gap:4px}.location-controls select{max-width:105px;min-width:76px;padding:6px 7px;font-size:10px}.location-controls label{font-size:8px}}
+
+
+/* Warranty management */
+textarea{width:100%;padding:10px 12px;border:1px solid #e0e6ed;border-radius:8px;background:#fff;color:#26354c;font:inherit;font-size:12px;resize:vertical}
+textarea:focus{outline:none;border-color:#159565}
+.form-section-title{grid-column:1/-1;font-size:11px;font-weight:800;color:#159565;border-top:1px solid #edf0f4;padding-top:14px;margin-top:4px}
+.span-2{grid-column:span 2}
+td small{display:block;color:#8994a5;font-size:9px;margin-top:5px;white-space:normal}
+.warranty-claim-card{display:grid;gap:9px;padding:14px;border:1px solid #e6ebf1;border-radius:10px;min-width:0}
+.warranty-claim-card b{font-size:12px;color:#243149}
+.warranty-claim-card small{font-size:10px;color:#8994a5}
+.action-group{display:flex;gap:10px;align-items:center}
+.danger-text{color:#b42318}
+@media(max-width:760px){.span-2{grid-column:1/-1}.form-section-title{grid-column:1/-1}}
