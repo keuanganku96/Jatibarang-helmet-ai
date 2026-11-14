@@ -178,12 +178,13 @@ export default function App() {
 
   async function saveProduct(e){
     e.preventDefault();setBusy(true);setError("");
-    const {error:saveError}=await supabase.rpc("create_product_with_stock",{
+    const {error:saveError}=await supabase.rpc("create_product_with_stock_discounted",{
       p_business_id:business.id,p_branch_id:branchId,p_warehouse_id:warehouseId,
       p_name:productForm.name,p_sku:productForm.sku,p_barcode:productForm.barcode,
       p_category:productForm.category,p_unit:productForm.unit,
       p_cost_price:Number(productForm.cost_price)||0,p_selling_price:Number(productForm.selling_price)||0,
-      p_min_stock:Number(productForm.min_stock)||0,p_initial_quantity:Number(productForm.initial_quantity)||0
+      p_min_stock:Number(productForm.min_stock)||0,p_initial_quantity:Number(productForm.initial_quantity)||0,
+      p_discount_type:productForm.discount_type,p_discount_value:Number(productForm.discount_value)||0
     });
     setBusy(false);
     if(saveError){setError(saveError.message);return;}
