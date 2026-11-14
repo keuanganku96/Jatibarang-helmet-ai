@@ -25,7 +25,7 @@ begin
  if auth.uid() is null then raise exception 'Sesi login tidak valid'; end if;
  select business_id,role,branch_id into v_actor from public.business_members where user_id=auth.uid() and is_active=true order by created_at limit 1;
  if not found or v_actor.role not in ('owner','admin') then raise exception 'Hanya Owner/Admin yang dapat mengelola data karyawan'; end if;
- select business_id,role,branch_id,is_active into v_target from public.business_members where user_id=p_user_id for update;
+ select business_id,role,branch_id,is_active into v_target from public.business_members where user_id=p_user_id and business_id=v_actor.business_id for update;
  if not found or v_target.business_id<>v_actor.business_id then raise exception 'Akun karyawan tidak terdaftar pada bisnis ini'; end if;
  if v_target.role='owner' then raise exception 'Peran Owner utama tidak dapat diubah dari menu karyawan'; end if;
  if v_actor.role='admin' and v_target.role='admin' then raise exception 'Admin tidak dapat mengubah akun Admin lain'; end if;
