@@ -263,6 +263,12 @@ export default function App() {
     const {data,error}=await supabase.functions.invoke("staff-access",{body:{action:"pair_device",business_id:business.id,branch_id:branchId,device_id:getStaffDeviceId(),device_label:(navigator.userAgent||"Perangkat kasir").slice(0,80)}});
     setBusy(false);if(error||data?.error){setError(data?.error||error?.message||"Gagal memasangkan perangkat.");return;}setNotice("Perangkat ini disetujui untuk cabang aktif. Karyawan dapat masuk menggunakan PIN.");
   }
+  async function revokeCurrentDevice(){
+    if(!window.confirm("Cabut akses login PIN pada perangkat ini? Karyawan tidak dapat masuk kembali sampai Owner memasangkannya lagi."))return;
+    setBusy(true);setError("");
+    const {data,error}=await supabase.functions.invoke("staff-access",{body:{action:"revoke_device",business_id:business.id,device_id:getStaffDeviceId()}});
+    setBusy(false);if(error||data?.error){setError(data?.error||error?.message||"Gagal mencabut perangkat.");return;}setNotice("Akses PIN perangkat ini berhasil dicabut.");
+  }
   async function resetStaffPin(profileId,staffName){
     const nextPin=window.prompt("Masukkan PIN baru 6 angka untuk "+staffName+":");if(nextPin===null)return;
     if(!/^\d{6}$/.test(nextPin)){setError("PIN harus tepat 6 angka.");return;}setBusy(true);setError("");
@@ -465,6 +471,11 @@ export default function App() {
   }
 
   const card=(label,value,sub,icon)=><div className="stat"><span className="stat-icon">{icon}</span><div><small>{label}</small><strong>{value}</strong><span className="muted">{sub}</span></div></div>;
+  const visibleNav = ["owner","admin"].includes(membership?.role) ? NAV
+    : membership?.role==="manager" ? NAV.filter(([name])=>name!=="Pengaturan")
+    : membership?.role==="cashier" ? NAV.filter(([name])=>["Dashboard","Kasir","Pelanggan","Garansi","Karyawan & Shift"].includes(name))
+    : NAV.filter(([name])=>["Dashboard","Karyawan & Shift"].includes(name));
+  useEffect(()=>{if(membership&&!visibleNav.some(([name])=>name===page))setPage("Dashboard");},[membership?.role,page]);
 
   if(!supabaseConfigured)return <main className="auth-screen"><div className="auth-card"><h1>SMART POS JATIBARANG</h1><p>Koneksi Supabase belum dikonfigurasi pada deployment ini. Periksa Vercel Environment Variables lalu deploy ulang.</p></div></main>;
   if(authLoading)return <main className="auth-screen"><div className="auth-card">Memeriksa sesi akun...</div></main>;
@@ -472,7 +483,7 @@ export default function App() {
 
   return <div className="app-shell">
     <aside className="sidebar"><div className="brand"><div className="brand-mark">SJ</div><div><b>SMART POS</b><small>JATIBARANG HELMET</small></div></div>
-      <div className="side-label">MENU UTAMA</div>{NAV.map(([name,icon])=><button key={name} className={page===name?"side-link active":"side-link"} onClick={()=>setPage(name)}><span>{icon}</span>{name}</button>)}
+      <div className="side-label">MENU UTAMA</div>{visibleNav.map(([name,icon])=><button key={name} className={page===name?"side-link active":"side-link"} onClick={()=>setPage(name)}><span>{icon}</span>{name}</button>)}
       <div className="side-bottom"><span className="status-dot"></span> Terhubung ke cloud<small>{business?.name||"Memuat bisnis..."}</small></div>
     </aside>
     <main className="main-area">
@@ -561,7 +572,7 @@ export default function App() {
           <p className="warning-note">Catatan: ringkasan ini memakai maksimal 200 catatan terbaru. Pembelian barang yang diterima belum otomatis menjadi pengeluaran kas karena pembayaran pemasok/hutang belum dibangun. Laba-rugi akuntansi belum ditampilkan pada tahap ini.</p></>}
         {page==="Karyawan & Shift"&&<><div className="welcome"><div><span className="eyebrow">PEOPLE & CASH CONTROL</span><h1>Karyawan, Absensi & Shift</h1><p>Kelola profil akun yang sudah bergabung, cabang kerja, peran, absensi, dan rekonsiliasi kasir.</p></div><button className="secondary" onClick={loadData}>↻ Segarkan</button></div>
           {["owner","admin"].includes(membership?.role)?<section className="panel">
-            <div className="panel-head"><div><h3>Manajemen karyawan & perangkat</h3><p>Buat akun tanpa email pribadi. Karyawan masuk menggunakan kode dan PIN 6 angka.</p></div><button type="button" className="secondary" disabled={busy||!branchId} onClick={pairCurrentDevice}>Pasangkan perangkat ini</button></div>
+            <div className="panel-head"><div><h3>Manajemen karyawan & perangkat</h3><p>Buat akun tanpa email pribadi. Karyawan masuk menggunakan kode dan PIN 6 angka.</p></div><div className="action-group"><button type="button" className="secondary" disabled={busy||!branchId} onClick={pairCurrentDevice}>Pasangkan perangkat ini</button><button type="button" className="secondary" disabled={busy} onClick={revokeCurrentDevice}>Cabut akses perangkat ini</button></div></div>
             <form className="form-grid" onSubmit={createStaffAccount}>
               <label>Kode karyawan<input required maxLength="32" value={staffDraft.employee_code} onChange={e=>setStaffDraft({...staffDraft,employee_code:e.target.value.toUpperCase()})} placeholder="Contoh: KRY001"/></label>
               <label>Nama lengkap<input required maxLength="120" value={staffDraft.full_name} onChange={e=>setStaffDraft({...staffDraft,full_name:e.target.value})} placeholder="Nama karyawan"/></label>
