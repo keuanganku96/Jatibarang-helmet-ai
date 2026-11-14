@@ -74,6 +74,8 @@ export default function App() {
   const [cashEntries,setCashEntries] = useState([]);
   const [attendanceRows,setAttendanceRows] = useState([]);
   const [cashSessions,setCashSessions] = useState([]);
+  const [staffMembers,setStaffMembers] = useState([]);
+  const [staffDraft,setStaffDraft] = useState({user_id:"",employee_code:"",full_name:"",phone:"",job_title:"",branch_id:"",role:"cashier",is_active:true});
   const [stockOpnames,setStockOpnames] = useState([]);
   const [stockCountDraft,setStockCountDraft] = useState({});
   const [opnameNotes,setOpnameNotes] = useState("");
@@ -140,6 +142,17 @@ export default function App() {
         supabase.from("stock_transfers").select("id,business_id,from_branch_id,to_branch_id,from_warehouse_id,to_warehouse_id,transfer_no,status,notes,total_lines,created_at,approved_at").eq("business_id",businessId).order("created_at",{ascending:false}).limit(100)
       ]);
       for(const result of [bizRes,branchRes,warehouseRes,productRes,inventoryRes,categoryRes,customerRes,salesRes,suppliersRes,purchasesRes,paymentsRes,cashRes,tiersRes,warrantiesRes,claimsRes,attendanceRes,shiftRes,opnameRes,transferRes]) if(result.error) throw result.error;
+      let staffMembersData = [];
+      if (["owner","admin"].includes(member.role)) {
+        const [membersRes,profilesRes] = await Promise.all([
+          supabase.from("business_members").select("user_id,branch_id,role,is_active,created_at").eq("business_id",businessId).order("created_at"),
+          supabase.from("staff_profiles").select("user_id,branch_id,employee_code,full_name,phone,job_title").eq("business_id",businessId)
+        ]);
+        if(membersRes.error) throw membersRes.error;
+        if(profilesRes.error) throw profilesRes.error;
+        const profileMap = Object.fromEntries((profilesRes.data||[]).map(p=>[p.user_id,p]));
+        staffMembersData = (membersRes.data||[]).map(m=>({...m,profile:profileMap[m.user_id]||null}));
+      }
       // Owner/Admin may switch across active branches. Other roles remain
       // restricted to the branch assigned to their membership.
       const accessibleBranches = ["owner","admin"].includes(member.role)
@@ -163,7 +176,7 @@ export default function App() {
       setBranchId(activeBranch?.id||""); setWarehouseId(activeWarehouse?.id||"");
       setProducts(productRes.data.map(p=>({...p,category:categoryMap[p.category_id]||"Umum",stock:stockMap[p.id]||0,price:Number(p.selling_price),cost:Number(p.cost_price),min:Number(p.min_stock),discountType:p.discount_type||"none",discountValue:Number(p.discount_value)||0})));
       setCustomers(customerRes.data); setSales(salesRes.data); setMembershipTiers(tiersRes.data||[]);
-      setSuppliers(suppliersRes.data); setPurchases(purchasesRes.data); setSupplierPayments(paymentsRes.data||[]); setCashEntries(cashRes.data||[]); setWarranties(warrantiesRes.data||[]); setWarrantyClaims(claimsRes.data||[]); setAttendanceRows(attendanceRes.data||[]); setCashSessions(shiftRes.data||[]); setStockOpnames(opnameRes.data||[]); setStockTransfers(transferRes.data||[]);
+      setSuppliers(suppliersRes.data); setPurchases(purchasesRes.data); setSupplierPayments(paymentsRes.data||[]); setCashEntries(cashRes.data||[]); setWarranties(warrantiesRes.data||[]); setWarrantyClaims(claimsRes.data||[]); setAttendanceRows(attendanceRes.data||[]); setCashSessions(shiftRes.data||[]); setStockOpnames(opnameRes.data||[]); setStockTransfers(transferRes.data||[]); setStaffMembers(staffMembersData);
     } catch(e) { setError(e.message||"Gagal memuat data toko."); }
     finally { setBusy(false); }
   },[session,branchId,warehouseId]);
@@ -214,6 +227,21 @@ export default function App() {
     const {error:e}=await supabase.rpc("approve_stock_opname",{p_opname_id:row.id});
     setBusy(false);if(e){setError(e.message);return;}
     setNotice("Stok opname disetujui dan persediaan sudah disesuaikan.");await loadData();
+  }
+
+  function editStaffMember(row){
+    const p=row.profile||{};
+    setStaffDraft({user_id:row.user_id,employee_code:p.employee_code||"",full_name:p.full_name||"",phone:p.phone||"",job_title:p.job_title||"",branch_id:row.branch_id||p.branch_id||branchId,role:row.role==="owner"?"cashier":row.role,is_active:Boolean(row.is_active)});
+  }
+  async function saveStaffProfile(e){
+    e.preventDefault();
+    if(!staffDraft.user_id){setError("Pilih akun karyawan yang sudah terdaftar.");return;}
+    setBusy(true);setError("");
+    const {error:e2}=await supabase.rpc("save_staff_profile",{p_user_id:staffDraft.user_id,p_branch_id:staffDraft.branch_id,p_employee_code:staffDraft.employee_code,p_full_name:staffDraft.full_name,p_phone:staffDraft.phone||null,p_job_title:staffDraft.job_title||null,p_role:staffDraft.role,p_is_active:staffDraft.is_active});
+    setBusy(false);if(e2){setError(e2.message);return;}
+    setNotice("Profil dan hak akses karyawan berhasil disimpan.");
+    setStaffDraft({user_id:"",employee_code:"",full_name:"",phone:"",job_title:"",branch_id:branchId,role:"cashier",is_active:true});
+    await loadData();
   }
 
   async function recordAttendance(action){
@@ -505,7 +533,21 @@ export default function App() {
           {["owner","admin","manager"].includes(membership?.role)&&<form className="panel form-grid" onSubmit={saveExpense}><div><h3>Catat pengeluaran</h3><p className="muted">Hanya Owner, Admin, dan Manager yang dapat menyimpan pengeluaran.</p></div><label>Kategori<select value={expenseForm.category} onChange={e=>setExpenseForm({...expenseForm,category:e.target.value})}><option>Operasional</option><option>Transportasi</option><option>Listrik & Air</option><option>Gaji</option><option>Pemasaran</option><option>Perawatan</option><option>Lainnya</option></select></label><label>Keterangan<input required maxLength="500" value={expenseForm.description} onChange={e=>setExpenseForm({...expenseForm,description:e.target.value})} placeholder="Contoh: pembelian perlengkapan toko"/></label><label>Nominal (Rp)<input required type="number" min="1" step="1" value={expenseForm.amount} onChange={e=>setExpenseForm({...expenseForm,amount:e.target.value})} placeholder="100000"/></label><div className="form-actions"><button className="primary" disabled={busy}>Simpan pengeluaran</button></div></form>}
           <section className="panel"><div className="panel-head"><div><h3>Riwayat kas</h3><p>Uang masuk dari transaksi dan pengeluaran manual</p></div><button className="secondary" onClick={loadData}>↻ Segarkan</button></div><div className="table-wrap"><table><thead><tr><th>TANGGAL</th><th>JENIS</th><th>KATEGORI</th><th>KETERANGAN</th><th>NOMINAL</th></tr></thead><tbody>{cashEntries.map(x=><tr key={x.id}><td>{new Date(x.created_at).toLocaleString("id-ID")}</td><td><span className={x.entry_type==="income"?"badge green":"badge red"}>{x.entry_type==="income"?"Masuk":"Keluar"}</span></td><td>{x.category}</td><td>{x.description}</td><td className="amount">{money(x.amount)}</td></tr>)}</tbody></table></div>{cashEntries.length===0&&<div className="empty">Belum ada catatan kas untuk cabang ini.</div>}</section>
           <p className="warning-note">Catatan: ringkasan ini memakai maksimal 200 catatan terbaru. Pembelian barang yang diterima belum otomatis menjadi pengeluaran kas karena pembayaran pemasok/hutang belum dibangun. Laba-rugi akuntansi belum ditampilkan pada tahap ini.</p></>}
-        {page==="Karyawan & Shift"&&<><div className="welcome"><div><span className="eyebrow">PEOPLE & CASH CONTROL</span><h1>Karyawan, Absensi & Shift</h1><p>Catat jam kerja dan cocokkan uang fisik dengan transaksi tunai per kasir.</p></div><button className="secondary" onClick={loadData}>↻ Segarkan</button></div>
+        {page==="Karyawan & Shift"&&<><div className="welcome"><div><span className="eyebrow">PEOPLE & CASH CONTROL</span><h1>Karyawan, Absensi & Shift</h1><p>Kelola profil akun yang sudah bergabung, cabang kerja, peran, absensi, dan rekonsiliasi kasir.</p></div><button className="secondary" onClick={loadData}>↻ Segarkan</button></div>
+          {["owner","admin"].includes(membership?.role)?<section className="panel"><div className="panel-head"><div><h3>Data karyawan & hak akses</h3><p>Profil hanya dapat dibuat untuk akun yang sudah menjadi anggota bisnis. Undangan akun baru belum diaktifkan.</p></div></div>
+            <form className="form-grid" onSubmit={saveStaffProfile}>
+              <label className="span-2">Akun anggota<select required value={staffDraft.user_id} onChange={e=>{const row=staffMembers.find(m=>m.user_id===e.target.value);if(row)editStaffMember(row);else setStaffDraft({...staffDraft,user_id:e.target.value});}}><option value="">Pilih akun yang sudah terdaftar</option>{staffMembers.filter(m=>m.role!=="owner").map(m=><option key={m.user_id} value={m.user_id}>{m.profile?.full_name||("Akun "+m.user_id.slice(0,8))} · {m.role} · {m.is_active?"Aktif":"Nonaktif"}</option>)}</select></label>
+              <label>Kode karyawan<input required maxLength="32" value={staffDraft.employee_code} onChange={e=>setStaffDraft({...staffDraft,employee_code:e.target.value.toUpperCase()})} placeholder="Contoh: KRY001"/></label>
+              <label>Nama lengkap<input required maxLength="120" value={staffDraft.full_name} onChange={e=>setStaffDraft({...staffDraft,full_name:e.target.value})}/></label>
+              <label>Nomor telepon<input maxLength="30" value={staffDraft.phone} onChange={e=>setStaffDraft({...staffDraft,phone:e.target.value})}/></label>
+              <label>Jabatan<input maxLength="80" value={staffDraft.job_title} onChange={e=>setStaffDraft({...staffDraft,job_title:e.target.value})} placeholder="Contoh: Kasir / Gudang"/></label>
+              <label>Cabang<select required value={staffDraft.branch_id||branchId} onChange={e=>setStaffDraft({...staffDraft,branch_id:e.target.value})}>{branches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></label>
+              <label>Peran akses<select value={staffDraft.role} onChange={e=>setStaffDraft({...staffDraft,role:e.target.value})}>{(membership?.role==="owner"?["admin","manager","cashier","staff"]:["manager","cashier","staff"]).map(r=><option key={r} value={r}>{({admin:"Admin",manager:"Manager",cashier:"Kasir",staff:"Staf"})[r]}</option>)}</select></label>
+              <label className="checkbox-label"><input type="checkbox" checked={staffDraft.is_active} onChange={e=>setStaffDraft({...staffDraft,is_active:e.target.checked})}/> Akun aktif</label>
+              <div className="form-actions"><button className="primary" disabled={busy||!staffDraft.user_id}>Simpan profil & akses</button><button type="button" className="secondary" onClick={()=>setStaffDraft({user_id:"",employee_code:"",full_name:"",phone:"",job_title:"",branch_id:branchId,role:"cashier",is_active:true})}>Kosongkan form</button></div>
+            </form>
+            <div className="table-wrap"><table><thead><tr><th>KODE</th><th>NAMA / ID AKUN</th><th>JABATAN</th><th>CABANG</th><th>PERAN</th><th>STATUS</th><th>AKSI</th></tr></thead><tbody>{staffMembers.map(m=><tr key={m.user_id}><td>{m.profile?.employee_code||"—"}</td><td>{m.profile?.full_name||"Akun "+m.user_id.slice(0,8)+"…"}<small className="muted">{m.user_id.slice(0,18)}…</small></td><td>{m.profile?.job_title||"—"}</td><td>{branches.find(b=>b.id===m.branch_id)?.name||"—"}</td><td>{m.role}</td><td><span className={"badge "+(m.is_active?"green":"red")}>{m.is_active?"Aktif":"Nonaktif"}</span></td><td>{m.role==="owner"?<span className="muted">Dilindungi</span>:<button type="button" className="text-btn" onClick={()=>editStaffMember(m)}>Edit</button>}</td></tr>)}</tbody></table></div>{staffMembers.length===0&&<div className="empty">Belum ada anggota bisnis selain akun saat ini.</div>}
+          </section>:<div className="panel"><div className="notice">Pengelolaan profil dan hak akses hanya tersedia untuk Owner/Admin. Anda tetap dapat melakukan absensi dan mengelola shift sendiri.</div></div>}
           <div className="stats">{card("Absensi hari ini",attendanceRows.filter(a=>a.work_date===new Date().toLocaleDateString("en-CA",{timeZone:"Asia/Jakarta"})).length,"Catatan pada cabang aktif","◷")}{card("Shift terbuka",cashSessions.filter(s=>s.status==="open").length,"Kasir yang belum tutup shift","▣")}{card("Shift ditutup",cashSessions.filter(s=>s.status==="closed").length,"Riwayat 100 shift terbaru","✓")}{card("Selisih kas tercatat",money(cashSessions.filter(s=>s.status==="closed").reduce((sum,s)=>sum+Number(s.cash_difference||0),0)),"Akumulasi pada daftar terbaru","Rp")}</div>
           <section className="panel"><div className="panel-head"><div><h3>Absensi saya</h3><p>Jam masuk dan pulang tercatat berdasarkan akun login.</p></div></div>
             {(()=>{const today=new Date().toLocaleDateString("en-CA",{timeZone:"Asia/Jakarta"});const mine=attendanceRows.find(a=>a.user_id===session.user.id&&a.work_date===today);return <><div className="setting-row"><span>Status hari ini</span><b className={mine?.clock_out_at?"badge green":mine?"badge yellow":"badge"}>{mine?.clock_out_at?"Sudah pulang":mine?"Sedang bekerja":"Belum absen"}</b></div><div className="setting-row"><span>Jam masuk</span><b>{mine?.clock_in_at?new Date(mine.clock_in_at).toLocaleString("id-ID"):"—"}</b></div><div className="setting-row"><span>Jam pulang</span><b>{mine?.clock_out_at?new Date(mine.clock_out_at).toLocaleString("id-ID"):"—"}</b></div><label>Catatan (opsional)<input value={shiftNote} maxLength="500" onChange={e=>setShiftNote(e.target.value)} placeholder="Contoh: mulai shift pagi"/></label><div className="form-actions"><button className="primary" disabled={busy||Boolean(mine)} onClick={()=>recordAttendance("clock_in")}>Absen masuk</button><button className="secondary" disabled={busy||!mine||Boolean(mine.clock_out_at)} onClick={()=>recordAttendance("clock_out")}>Absen pulang</button></div></>;})()}
