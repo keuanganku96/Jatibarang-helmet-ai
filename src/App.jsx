@@ -4,7 +4,7 @@ import JsBarcode from "jsbarcode";
 
 const money = value => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(Number(value) || 0);
 const BUSINESS_ID = "8552ecbe-a62e-41b9-b274-b855f6b5e37b";
-const NAV = [["Dashboard","▦"],["Kasir","▣"],["Produk & Stok","▤"],["Pembelian","⇧"],["Pemasok","♧"],["Pelanggan","♙"],["Garansi","✓"],["Laporan","▥"],["Keuangan","Rp"],["Pengaturan","⚙"]];
+const NAV = [["Dashboard","▦"],["Kasir","▣"],["Produk & Stok","▤"],["Pembelian","⇧"],["Pemasok","♧"],["Pelanggan","♙"],["Garansi","✓"],["Laporan","▥"],["Keuangan","Rp"],["Karyawan & Shift","♙"],["Pengaturan","⚙"]];
 
 function Login({ onLogin }) {
   const [email,setEmail] = useState("");
@@ -71,6 +71,11 @@ export default function App() {
   const [paymentDrafts,setPaymentDrafts] = useState({});
   const [sales,setSales] = useState([]);
   const [cashEntries,setCashEntries] = useState([]);
+  const [attendanceRows,setAttendanceRows] = useState([]);
+  const [cashSessions,setCashSessions] = useState([]);
+  const [openingFloat,setOpeningFloat] = useState("0");
+  const [countedCash,setCountedCash] = useState("");
+  const [shiftNote,setShiftNote] = useState("");
   const [expenseForm,setExpenseForm] = useState({category:"Operasional",description:"",amount:""});
   const [cart,setCart] = useState([]);
   const [search,setSearch] = useState("");
@@ -104,7 +109,7 @@ export default function App() {
       if(memberError) throw memberError;
       if(!member) throw new Error("Akun ini belum terdaftar sebagai anggota bisnis. Hubungi Owner.");
       const businessId = member.business_id;
-      const [bizRes,branchRes,warehouseRes,productRes,inventoryRes,categoryRes,customerRes,salesRes,suppliersRes,purchasesRes,paymentsRes,cashRes,tiersRes,warrantiesRes,claimsRes] = await Promise.all([
+      const [bizRes,branchRes,warehouseRes,productRes,inventoryRes,categoryRes,customerRes,salesRes,suppliersRes,purchasesRes,paymentsRes,cashRes,tiersRes,warrantiesRes,claimsRes,attendanceRes,shiftRes] = await Promise.all([
         supabase.from("businesses").select("id,name,currency,timezone").eq("id",businessId).single(),
         supabase.from("branches").select("id,name,is_active").eq("business_id",businessId).eq("is_active",true).order("name"),
         supabase.from("warehouses").select("id,name,branch_id,is_active").eq("business_id",businessId).eq("is_active",true).order("name"),
@@ -119,9 +124,11 @@ export default function App() {
         (branchId ? supabase.from("cash_entries").select("id,entry_type,category,description,amount,created_at,reference_type").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("cash_entries").select("id,entry_type,category,description,amount,created_at,reference_type").eq("business_id",businessId)).order("created_at",{ascending:false}).limit(200),
         supabase.from("membership_tiers").select("id,business_id,tier_code,tier_name,min_transactions,min_spend,discount_percent,is_active").eq("business_id",businessId).order("tier_code"),
         supabase.from("warranties").select("id,business_id,sale_id,sale_item_id,customer_id,product_name,invoice_no,warranty_code,purchase_date,expires_at,quantity,purchase_value,coverage_percent,max_coverage_amount,min_claim_amount,max_claims,claims_used,terms").eq("business_id",businessId).order("created_at",{ascending:false}).limit(500),
-        supabase.from("warranty_claims").select("id,business_id,warranty_id,claim_no,claim_description,coverage_value,status,created_at,processed_at,resolution_notes").eq("business_id",businessId).order("created_at",{ascending:false}).limit(500)
+        supabase.from("warranty_claims").select("id,business_id,warranty_id,claim_no,claim_description,coverage_value,status,created_at,processed_at,resolution_notes").eq("business_id",businessId).order("created_at",{ascending:false}).limit(500),
+        (branchId ? supabase.from("staff_attendance").select("id,business_id,branch_id,user_id,work_date,clock_in_at,clock_out_at,clock_in_note,clock_out_note").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("staff_attendance").select("id,business_id,branch_id,user_id,work_date,clock_in_at,clock_out_at,clock_in_note,clock_out_note").eq("business_id",businessId)).order("work_date",{ascending:false}).limit(100),
+        (branchId ? supabase.from("cash_register_sessions").select("id,business_id,branch_id,cashier_id,opened_at,opening_float,closed_at,expected_cash,counted_cash,cash_difference,cash_sales,cash_outflows,opening_note,closing_note,status").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("cash_register_sessions").select("id,business_id,branch_id,cashier_id,opened_at,opening_float,closed_at,expected_cash,counted_cash,cash_difference,cash_sales,cash_outflows,opening_note,closing_note,status").eq("business_id",businessId)).order("opened_at",{ascending:false}).limit(100)
       ]);
-      for(const result of [bizRes,branchRes,warehouseRes,productRes,inventoryRes,categoryRes,customerRes,salesRes,suppliersRes,purchasesRes,paymentsRes,cashRes,tiersRes,warrantiesRes,claimsRes]) if(result.error) throw result.error;
+      for(const result of [bizRes,branchRes,warehouseRes,productRes,inventoryRes,categoryRes,customerRes,salesRes,suppliersRes,purchasesRes,paymentsRes,cashRes,tiersRes,warrantiesRes,claimsRes,attendanceRes,shiftRes]) if(result.error) throw result.error;
       // Owner/Admin may switch across active branches. Other roles remain
       // restricted to the branch assigned to their membership.
       const accessibleBranches = ["owner","admin"].includes(member.role)
@@ -145,7 +152,7 @@ export default function App() {
       setBranchId(activeBranch?.id||""); setWarehouseId(activeWarehouse?.id||"");
       setProducts(productRes.data.map(p=>({...p,category:categoryMap[p.category_id]||"Umum",stock:stockMap[p.id]||0,price:Number(p.selling_price),cost:Number(p.cost_price),min:Number(p.min_stock),discountType:p.discount_type||"none",discountValue:Number(p.discount_value)||0})));
       setCustomers(customerRes.data); setSales(salesRes.data); setMembershipTiers(tiersRes.data||[]);
-      setSuppliers(suppliersRes.data); setPurchases(purchasesRes.data); setSupplierPayments(paymentsRes.data||[]); setCashEntries(cashRes.data||[]); setWarranties(warrantiesRes.data||[]); setWarrantyClaims(claimsRes.data||[]);
+      setSuppliers(suppliersRes.data); setPurchases(purchasesRes.data); setSupplierPayments(paymentsRes.data||[]); setCashEntries(cashRes.data||[]); setWarranties(warrantiesRes.data||[]); setWarrantyClaims(claimsRes.data||[]); setAttendanceRows(attendanceRes.data||[]); setCashSessions(shiftRes.data||[]);
     } catch(e) { setError(e.message||"Gagal memuat data toko."); }
     finally { setBusy(false); }
   },[session,branchId,warehouseId]);
@@ -161,6 +168,30 @@ export default function App() {
     const {error:saveError}=await supabase.from("membership_tiers").upsert(payload,{onConflict:"business_id,tier_code"});
     if(saveError)setError(saveError.message);else{setNotice("Aturan membership "+tier.tier_name+" berhasil disimpan.");await loadData();}
     setBusy(false);
+  }
+
+  async function recordAttendance(action){
+    setBusy(true);setError("");
+    const {error:e}=await supabase.rpc("record_staff_attendance",{p_branch_id:branchId,p_action:action,p_note:shiftNote||null});
+    setBusy(false);if(e){setError(e.message);return;}
+    setShiftNote("");setNotice(action==="clock_in"?"Absen masuk berhasil dicatat.":"Absen pulang berhasil dicatat.");await loadData();
+  }
+  async function openShift(){
+    const amount=Number(openingFloat);
+    if(!Number.isFinite(amount)||amount<0){setError("Modal awal kas tidak valid.");return;}
+    setBusy(true);setError("");
+    const {error:e}=await supabase.rpc("open_cash_register",{p_branch_id:branchId,p_opening_float:amount,p_note:shiftNote||null});
+    setBusy(false);if(e){setError(e.message);return;}
+    setOpeningFloat("0");setShiftNote("");setNotice("Shift kasir berhasil dibuka.");await loadData();
+  }
+  async function closeShift(sessionRow){
+    const amount=Number(countedCash);
+    if(!Number.isFinite(amount)||amount<0){setError("Masukkan jumlah uang fisik yang dihitung.");return;}
+    setBusy(true);setError("");
+    const {data,error:e}=await supabase.rpc("close_cash_register",{p_session_id:sessionRow.id,p_counted_cash:amount,p_note:shiftNote||null});
+    setBusy(false);if(e){setError(e.message);return;}
+    const result=data?.[0];setCountedCash("");setShiftNote("");
+    setNotice("Shift ditutup. Selisih kas: "+money(result?.cash_difference||0)+".");await loadData();
   }
 
   async function login(email,password){return await supabase.auth.signInWithPassword({email,password});}
@@ -377,6 +408,17 @@ export default function App() {
           {["owner","admin","manager"].includes(membership?.role)&&<form className="panel form-grid" onSubmit={saveExpense}><div><h3>Catat pengeluaran</h3><p className="muted">Hanya Owner, Admin, dan Manager yang dapat menyimpan pengeluaran.</p></div><label>Kategori<select value={expenseForm.category} onChange={e=>setExpenseForm({...expenseForm,category:e.target.value})}><option>Operasional</option><option>Transportasi</option><option>Listrik & Air</option><option>Gaji</option><option>Pemasaran</option><option>Perawatan</option><option>Lainnya</option></select></label><label>Keterangan<input required maxLength="500" value={expenseForm.description} onChange={e=>setExpenseForm({...expenseForm,description:e.target.value})} placeholder="Contoh: pembelian perlengkapan toko"/></label><label>Nominal (Rp)<input required type="number" min="1" step="1" value={expenseForm.amount} onChange={e=>setExpenseForm({...expenseForm,amount:e.target.value})} placeholder="100000"/></label><div className="form-actions"><button className="primary" disabled={busy}>Simpan pengeluaran</button></div></form>}
           <section className="panel"><div className="panel-head"><div><h3>Riwayat kas</h3><p>Uang masuk dari transaksi dan pengeluaran manual</p></div><button className="secondary" onClick={loadData}>↻ Segarkan</button></div><div className="table-wrap"><table><thead><tr><th>TANGGAL</th><th>JENIS</th><th>KATEGORI</th><th>KETERANGAN</th><th>NOMINAL</th></tr></thead><tbody>{cashEntries.map(x=><tr key={x.id}><td>{new Date(x.created_at).toLocaleString("id-ID")}</td><td><span className={x.entry_type==="income"?"badge green":"badge red"}>{x.entry_type==="income"?"Masuk":"Keluar"}</span></td><td>{x.category}</td><td>{x.description}</td><td className="amount">{money(x.amount)}</td></tr>)}</tbody></table></div>{cashEntries.length===0&&<div className="empty">Belum ada catatan kas untuk cabang ini.</div>}</section>
           <p className="warning-note">Catatan: ringkasan ini memakai maksimal 200 catatan terbaru. Pembelian barang yang diterima belum otomatis menjadi pengeluaran kas karena pembayaran pemasok/hutang belum dibangun. Laba-rugi akuntansi belum ditampilkan pada tahap ini.</p></>}
+        {page==="Karyawan & Shift"&&<><div className="welcome"><div><span className="eyebrow">PEOPLE & CASH CONTROL</span><h1>Karyawan, Absensi & Shift</h1><p>Catat jam kerja dan cocokkan uang fisik dengan transaksi tunai per kasir.</p></div><button className="secondary" onClick={loadData}>↻ Segarkan</button></div>
+          <div className="stats">{card("Absensi hari ini",attendanceRows.filter(a=>a.work_date===new Date().toLocaleDateString("en-CA",{timeZone:"Asia/Jakarta"})).length,"Catatan pada cabang aktif","◷")}{card("Shift terbuka",cashSessions.filter(s=>s.status==="open").length,"Kasir yang belum tutup shift","▣")}{card("Shift ditutup",cashSessions.filter(s=>s.status==="closed").length,"Riwayat 100 shift terbaru","✓")}{card("Selisih kas tercatat",money(cashSessions.filter(s=>s.status==="closed").reduce((sum,s)=>sum+Number(s.cash_difference||0),0)),"Akumulasi pada daftar terbaru","Rp")}</div>
+          <section className="panel"><div className="panel-head"><div><h3>Absensi saya</h3><p>Jam masuk dan pulang tercatat berdasarkan akun login.</p></div></div>
+            {(()=>{const today=new Date().toLocaleDateString("en-CA",{timeZone:"Asia/Jakarta"});const mine=attendanceRows.find(a=>a.user_id===session.user.id&&a.work_date===today);return <><div className="setting-row"><span>Status hari ini</span><b className={mine?.clock_out_at?"badge green":mine?"badge yellow":"badge"}>{mine?.clock_out_at?"Sudah pulang":mine?"Sedang bekerja":"Belum absen"}</b></div><div className="setting-row"><span>Jam masuk</span><b>{mine?.clock_in_at?new Date(mine.clock_in_at).toLocaleString("id-ID"):"—"}</b></div><div className="setting-row"><span>Jam pulang</span><b>{mine?.clock_out_at?new Date(mine.clock_out_at).toLocaleString("id-ID"):"—"}</b></div><label>Catatan (opsional)<input value={shiftNote} maxLength="500" onChange={e=>setShiftNote(e.target.value)} placeholder="Contoh: mulai shift pagi"/></label><div className="form-actions"><button className="primary" disabled={busy||Boolean(mine)} onClick={()=>recordAttendance("clock_in")}>Absen masuk</button><button className="secondary" disabled={busy||!mine||Boolean(mine.clock_out_at)} onClick={()=>recordAttendance("clock_out")}>Absen pulang</button></div></>;})()}
+          </section>
+          <section className="panel"><div className="panel-head"><div><h3>Shift kasir saya</h3><p>Modal awal + penjualan tunai − pengeluaran kas yang dicatat oleh kasir.</p></div></div>
+            {(()=>{const opened=cashSessions.find(s=>s.cashier_id===session.user.id&&s.status==="open");return opened?<><div className="setting-row"><span>Shift dibuka</span><b>{new Date(opened.opened_at).toLocaleString("id-ID")}</b></div><div className="setting-row"><span>Modal awal</span><b>{money(opened.opening_float)}</b></div><label>Uang fisik saat tutup (Rp)<input type="number" min="0" step="1" value={countedCash} onChange={e=>setCountedCash(e.target.value)} placeholder="Hitung seluruh uang tunai di laci"/></label><label>Catatan tutup shift<input value={shiftNote} maxLength="500" onChange={e=>setShiftNote(e.target.value)} placeholder="Catatan selisih atau kondisi kas"/></label><button className="primary" disabled={busy||countedCash===""} onClick={()=>closeShift(opened)}>Tutup shift & hitung selisih</button></>:<><label>Modal awal kas (Rp)<input type="number" min="0" step="1" value={openingFloat} onChange={e=>setOpeningFloat(e.target.value)}/></label><label>Catatan buka shift<input value={shiftNote} maxLength="500" onChange={e=>setShiftNote(e.target.value)} placeholder="Contoh: laci kasir A"/></label><button className="primary" disabled={busy||!branchId} onClick={openShift}>Buka shift kasir</button></>;})()}
+          </section>
+          <section className="panel"><div className="panel-head"><div><h3>Riwayat absensi cabang</h3><p>Data 100 catatan terbaru. Identitas ditampilkan dengan ID akun untuk sementara.</p></div></div><div className="table-wrap"><table><thead><tr><th>TANGGAL</th><th>ID AKUN</th><th>MASUK</th><th>PULANG</th><th>DURASI</th></tr></thead><tbody>{attendanceRows.map(a=><tr key={a.id}><td>{new Date(a.work_date+"T00:00:00").toLocaleDateString("id-ID")}</td><td>{a.user_id===session.user.id?"Akun saya":a.user_id.slice(0,8)+"…"}</td><td>{new Date(a.clock_in_at).toLocaleTimeString("id-ID")}</td><td>{a.clock_out_at?new Date(a.clock_out_at).toLocaleTimeString("id-ID"):"—"}</td><td>{a.clock_out_at?Math.max(0,Math.round((new Date(a.clock_out_at)-new Date(a.clock_in_at))/60000))+" menit":"Aktif"}</td></tr>)}</tbody></table></div>{attendanceRows.length===0&&<div className="empty">Belum ada catatan absensi.</div>}</section>
+          <section className="panel"><div className="panel-head"><div><h3>Riwayat shift kasir</h3><p>Rekonsiliasi uang tunai per kasir dan cabang.</p></div></div><div className="table-wrap"><table><thead><tr><th>DIBUKA</th><th>KASIR</th><th>MODAL AWAL</th><th>PENJUALAN TUNAI</th><th>PENGELUARAN</th><th>UANG SEHARUSNYA</th><th>UANG FISIK</th><th>SELISIH</th><th>STATUS</th></tr></thead><tbody>{cashSessions.map(s=><tr key={s.id}><td>{new Date(s.opened_at).toLocaleString("id-ID")}</td><td>{s.cashier_id===session.user.id?"Akun saya":s.cashier_id.slice(0,8)+"…"}</td><td>{money(s.opening_float)}</td><td>{s.status==="closed"?money(s.cash_sales):"Berjalan"}</td><td>{s.status==="closed"?money(s.cash_outflows):"—"}</td><td>{s.status==="closed"?money(s.expected_cash):"—"}</td><td>{s.status==="closed"?money(s.counted_cash):"—"}</td><td>{s.status==="closed"?<b className={Number(s.cash_difference)===0?"text-safe":"danger-text"}>{money(s.cash_difference)}</b>:"—"}</td><td><span className={"badge "+(s.status==="closed"?"green":"yellow")}>{s.status==="closed"?"Ditutup":"Terbuka"}</span></td></tr>)}</tbody></table></div>{cashSessions.length===0&&<div className="empty">Belum ada shift kasir.</div>}</section>
+        </>}
         {page==="Pengaturan"&&<><div className="welcome"><div><span className="eyebrow">KONFIGURASI</span><h1>Pengaturan</h1><p>Informasi koneksi dan lokasi operasional.</p></div></div><section className="panel settings"><h3>{business?.name}</h3><p>SMART POS JATIBARANG</p><div className="setting-row"><span>Akun aktif</span><b>{session.user.email}</b></div><div className="setting-row"><span>Peran</span><b>{membership?.role}</b></div><div className="setting-row"><span>Cabang</span><b>{branches.find(b=>b.id===branchId)?.name||"—"}</b></div><div className="setting-row"><span>Gudang</span><b>{warehouses.find(w=>w.id===warehouseId)?.name||"—"}</b></div><div className="setting-row"><span>Penyimpanan</span><b className="badge green">Supabase Cloud</b></div><div className="setting-row"><span>Sinkronisasi</span><b className="badge green">Aktif</b></div><p className="warning-note">Transaksi kasir menggunakan prosedur database atomik agar penjualan, pembayaran, kas, dan pengurangan stok tercatat bersama-sama.</p><button className="secondary" onClick={loadData}>↻ Segarkan data</button></section>
           <section className="panel"><div className="panel-head"><div><h3>Aturan membership</h3><p>Atur syarat kenaikan Silver, Gold, dan Platinum. Tingkat aktif dihitung otomatis dari transaksi lunas pelanggan.</p></div></div>
           {membershipTiers.map(t=><form key={t.tier_code} className="form-grid tier-form" onSubmit={e=>{e.preventDefault();saveMembershipTier(t);}}>
