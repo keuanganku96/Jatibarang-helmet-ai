@@ -41,6 +41,10 @@ create table if not exists public.warranty_claims (
 create index if not exists warranties_business_expiry_idx on public.warranties(business_id,expires_at);
 create index if not exists warranties_customer_idx on public.warranties(customer_id);
 create index if not exists warranty_claims_warranty_idx on public.warranty_claims(warranty_id,created_at desc);
+create index if not exists warranties_sale_idx on public.warranties(sale_id);
+create index if not exists warranties_product_idx on public.warranties(product_id);
+create index if not exists warranty_claims_business_created_idx on public.warranty_claims(business_id,created_at desc);
+create index if not exists warranty_claims_processed_by_idx on public.warranty_claims(processed_by);
 
 alter table public.warranties enable row level security;
 alter table public.warranty_claims enable row level security;
@@ -151,6 +155,7 @@ begin
  if v_claim_count>=v_w.max_claims then raise exception 'Jumlah klaim aktif sudah mencapai batas garansi.'; end if;
  v_coverage:=round(v_w.purchase_value*v_w.coverage_percent/100,2);
  if v_w.max_coverage_amount is not null then v_coverage:=least(v_coverage,v_w.max_coverage_amount); end if;
+ if v_coverage<=0 then raise exception 'Persentase atau batas perlindungan garansi belum ditetapkan.'; end if;
  if v_coverage<v_w.min_claim_amount then raise exception 'Nilai perlindungan di bawah minimal klaim yang ditetapkan.'; end if;
  v_claim_no:='KLG-'||upper(substr(replace(gen_random_uuid()::text,'-',''),1,12));
  insert into public.warranty_claims(business_id,warranty_id,claim_no,claim_description,coverage_value,status)
