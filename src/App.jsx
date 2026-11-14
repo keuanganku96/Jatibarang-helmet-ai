@@ -158,14 +158,14 @@ export default function App() {
 
   async function saveCustomer(e){
     e.preventDefault();setBusy(true);setError("");
-    const {error:saveError}=await supabase.from("customers").insert({business_id:business.id,name:customerForm.name.trim(),phone:customerForm.phone||null,email:customerForm.email||null,address:customerForm.address||null});
+    const {error:saveError}=await supabase.rpc("create_customer",{p_business_id:business.id,p_name:customerForm.name.trim(),p_phone:customerForm.phone||null,p_email:customerForm.email||null,p_address:customerForm.address||null});
     setBusy(false);if(saveError){setError(saveError.message);return;}
     setShowCustomerForm(false);setCustomerForm({name:"",phone:"",email:"",address:""});setNotice("Pelanggan berhasil ditambahkan.");await loadData();
   }
 
   async function saveSupplier(e){
     e.preventDefault();setBusy(true);setError("");
-    const {error:saveError}=await supabase.from("suppliers").insert({business_id:business.id,name:supplierForm.name.trim(),phone:supplierForm.phone||null,email:supplierForm.email||null,address:supplierForm.address||null});
+    const {error:saveError}=await supabase.rpc("create_supplier",{p_business_id:business.id,p_name:supplierForm.name.trim(),p_phone:supplierForm.phone||null,p_email:supplierForm.email||null,p_address:supplierForm.address||null});
     setBusy(false);if(saveError){setError(saveError.message);return;}
     setShowSupplierForm(false);setSupplierForm({name:"",phone:"",email:"",address:""});setNotice("Pemasok berhasil ditambahkan.");await loadData();
   }
