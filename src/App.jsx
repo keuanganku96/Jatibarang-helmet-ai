@@ -63,6 +63,8 @@ export default function App() {
   const [paymentDrafts,setPaymentDrafts] = useState({});
   const [sales,setSales] = useState([]);
   const [reportPeriod,setReportPeriod] = useState("30");
+  const [profitLoss,setProfitLoss] = useState(null);
+  const [profitLossLoading,setProfitLossLoading] = useState(false);
   const [cashEntries,setCashEntries] = useState([]);
   const [attendanceRows,setAttendanceRows] = useState([]);
   const [cashSessions,setCashSessions] = useState([]);
@@ -124,7 +126,7 @@ export default function App() {
         supabase.from("inventory").select("product_id,warehouse_id,quantity").eq("business_id",businessId),
         supabase.from("categories").select("id,name").eq("business_id",businessId).order("name"),
         supabase.from("customers").select("id,name,customer_code,phone,email,address,total_transactions,total_spend,membership_tier").eq("business_id",businessId).order("name"),
-        (branchId ? supabase.from("sales").select("id,invoice_no,status,total,created_at,customer_id,cashier_id,sale_items(product_id,product_name,quantity,unit_price,discount,line_total)").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("sales").select("id,invoice_no,status,total,created_at,customer_id,cashier_id,sale_items(product_id,product_name,quantity,unit_price,discount,line_total)").eq("business_id",businessId)).order("created_at",{ascending:false}).limit(100),
+        (branchId ? supabase.from("sales").select("id,invoice_no,status,total,created_at,customer_id,cashier_id,sale_items(product_id,product_name,quantity,unit_price,unit_cost,discount,line_total)").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("sales").select("id,invoice_no,status,total,created_at,customer_id,cashier_id,sale_items(product_id,product_name,quantity,unit_price,unit_cost,discount,line_total)").eq("business_id",businessId)).order("created_at",{ascending:false}).limit(100),
         supabase.from("suppliers").select("id,name,phone,email,address").eq("business_id",businessId).order("name"),
         (branchId ? supabase.from("purchase_orders").select("id,purchase_no,status,total,amount_paid,payable_tracking_enabled,due_date,supplier_invoice_no,created_at,supplier_id,suppliers(name),purchase_items(quantity)").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("purchase_orders").select("id,purchase_no,status,total,amount_paid,payable_tracking_enabled,due_date,supplier_invoice_no,created_at,supplier_id,suppliers(name),purchase_items(quantity)").eq("business_id",businessId)).order("created_at",{ascending:false}).limit(100),
         (branchId ? supabase.from("supplier_payments").select("id,purchase_id,supplier_id,amount,payment_method,reference_no,notes,created_at").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("supplier_payments").select("id,purchase_id,supplier_id,amount,payment_method,reference_no,notes,created_at").eq("business_id",businessId)).order("created_at",{ascending:false}).limit(300),
@@ -182,6 +184,30 @@ export default function App() {
   },[session,branchId,warehouseId]);
 
   useEffect(()=>{ if(session) loadData(); },[session,loadData]);
+
+  useEffect(()=>{
+    if(!session?.user?.id || !business?.id || !branchId || !["owner","admin","manager"].includes(membership?.role)){
+      setProfitLoss(null);
+      return;
+    }
+    let alive=true;
+    const endAt=new Date();
+    const startAt=reportPeriod==="all"?null:new Date(endAt.getTime()-Number(reportPeriod)*86400000).toISOString();
+    setProfitLossLoading(true);
+    supabase.rpc("get_profit_loss_summary",{
+      p_business_id:business.id,
+      p_branch_id:branchId,
+      p_start_at:startAt,
+      p_end_at:endAt.toISOString()
+    }).then(({data,error})=>{
+      if(!alive)return;
+      if(error){setProfitLoss(null);setError("Laporan laba rugi gagal dimuat: "+error.message);}
+      else setProfitLoss(Array.isArray(data)?(data[0]||null):data);
+      setProfitLossLoading(false);
+    });
+    return ()=>{alive=false;};
+  },[session?.user?.id,business?.id,branchId,reportPeriod,membership?.role]);
+
 
   useEffect(()=>{if(!notice)return;const timer=setTimeout(()=>setNotice(""),3500);return()=>clearTimeout(timer);},[notice]);
 
@@ -569,7 +595,19 @@ export default function App() {
           {showCustomerForm&&<form className="panel form-grid" onSubmit={saveCustomer}><label>Nama pelanggan<input required value={customerForm.name} onChange={e=>setCustomerForm({...customerForm,name:e.target.value})}/></label><label>Nomor telepon<input value={customerForm.phone} onChange={e=>setCustomerForm({...customerForm,phone:e.target.value})}/></label><label>Email<input type="email" value={customerForm.email} onChange={e=>setCustomerForm({...customerForm,email:e.target.value})}/></label><label>Alamat<input value={customerForm.address} onChange={e=>setCustomerForm({...customerForm,address:e.target.value})}/></label><div className="form-actions"><button className="primary" disabled={busy}>Simpan pelanggan</button></div></form>}
           <section className="panel"><div className="table-wrap"><table><thead><tr><th>ID BARCODE</th><th>NAMA</th><th>MEMBER</th><th>TOTAL BELANJA</th><th>TRANSAKSI</th><th>TELEPON</th></tr></thead><tbody>{customers.map(c=><tr key={c.id}><td><CustomerBarcode customer={c}/></td><td><b>{c.name}</b></td><td><span className={"badge "+(c.membership_tier==="platinum"?"purple":c.membership_tier==="gold"?"yellow":"green")}>{(c.membership_tier||"silver").toUpperCase()}</span></td><td>{money(c.total_spend)}</td><td>{c.total_transactions||0}</td><td>{c.phone||"—"}</td></tr>)}</tbody></table></div>{customers.length===0&&<div className="empty">Belum ada data pelanggan.</div>}</section></>}
         {page==="Laporan"&&<><div className="welcome"><div><span className="eyebrow">ANALITIK</span><h1>Laporan Penjualan</h1><p>Analisis omzet, produk, dan kategori dari transaksi lunas yang tersimpan.</p></div><div className="action-group"><select value={reportPeriod} onChange={e=>setReportPeriod(e.target.value)}><option value="7">7 hari terakhir</option><option value="30">30 hari terakhir</option><option value="90">90 hari terakhir</option><option value="all">Semua data tersedia</option></select><button className="secondary" onClick={()=>{const rows=[["Invoice","Status","Tanggal","Total"],...reportSales.map(s=>[s.invoice_no,s.status,s.created_at,s.total])];const csv=rows.map(row=>row.map(v=>'"'+String(v??"").replaceAll('"','""')+'"').join(",")).join("\n");const a=document.createElement("a");a.href=URL.createObjectURL(new Blob(["\ufeff"+csv],{type:"text/csv;charset=utf-8"}));a.download="laporan-smart-pos.csv";a.click();URL.revokeObjectURL(a.href);}}>↓ Ekspor CSV</button></div></div>
-          <div className="stats">{card("Transaksi lunas",reportSales.length,"Sesuai periode", "▣")}{card("Total penjualan",money(reportRevenue),"Omzet transaksi", "↗")}{card("Rata-rata transaksi",money(reportSales.length?reportRevenue/reportSales.length:0),"Nilai per transaksi", "◷")}{card("Produk terjual",reportItems.reduce((a,x)=>a+x.quantity,0),"Total unit", "▤")}</div>
+          <div className="stats">{card("Transaksi lunas",profitLoss?.sales_count??reportSales.length,"Sesuai periode", "▣")}{card("Total penjualan",money(profitLoss?.revenue??reportRevenue),"Omzet bersih transaksi", "↗")}{card("Rata-rata transaksi",money((profitLoss?.sales_count??reportSales.length)?(Number(profitLoss?.revenue??reportRevenue)/Number(profitLoss?.sales_count??reportSales.length)):0),"Nilai per transaksi", "◷")}{card("Produk terjual",reportItems.reduce((a,x)=>a+x.quantity,0),"Unit dari 100 transaksi terbaru", "▤")}</div>
+          <section className="panel">
+            <div className="panel-head"><div><h3>Laporan laba rugi</h3><p>Perhitungan memakai snapshot modal saat transaksi. Pembayaran utang supplier tidak dihitung sebagai beban operasional.</p></div><span className="badge">{profitLossLoading?"Memuat...":"Cabang aktif"}</span></div>
+            <div className="stats">
+              {card("Penjualan bersih",money(profitLoss?.revenue||0),"Transaksi berstatus lunas","↗")}
+              {card("HPP",Number(profitLoss?.missing_cost_items||0)>0?"Belum lengkap":money(profitLoss?.hpp||0),"Harga modal barang terjual","▤")}
+              {card("Laba kotor",profitLoss?.gross_profit==null?"Belum dapat dihitung":money(profitLoss.gross_profit),"Penjualan bersih − HPP","＋")}
+              {card("Beban operasional",money(profitLoss?.operating_expenses||0),"Tidak termasuk pembayaran supplier","↘")}
+              {card("Pendapatan lain",money(profitLoss?.other_income||0),"Kategori Pendapatan lain","＋")}
+              {card("Laba bersih",profitLoss?.net_profit==null?"Belum dapat dihitung":money(profitLoss.net_profit),"Laba kotor − beban + pendapatan lain","＝")}
+            </div>
+            {Number(profitLoss?.missing_cost_items||0)>0&&<div className="notice warning-note">Ada {profitLoss.missing_cost_items} item dari {profitLoss.missing_cost_sales} transaksi yang belum memiliki snapshot harga modal. Data historis tersebut sengaja tidak dihitung sebagai HPP agar laporan tidak menampilkan laba yang keliru. Transaksi baru akan menyimpan modal saat checkout.</div>}
+          </section>
           <div className="grid-two"><section className="panel"><div className="panel-head"><div><h3>Penjualan per kategori</h3><p>Diurutkan berdasarkan omzet tertinggi.</p></div></div>{reportCategories.length===0?<div className="empty">Belum ada data pada periode ini.</div>:<div className="table-wrap"><table><thead><tr><th>KATEGORI</th><th>UNIT</th><th>OMZET</th><th>KONTRIBUSI</th></tr></thead><tbody>{reportCategories.map(row=><tr key={row.name}><td><b>{row.name}</b></td><td>{row.quantity}</td><td className="amount">{money(row.revenue)}</td><td>{reportRevenue?Math.round(row.revenue/reportRevenue*100):0}%</td></tr>)}</tbody></table></div>}</section>
           <section className="panel"><div className="panel-head"><div><h3>Produk terlaris</h3><p>Akumulasi transaksi lunas pada periode.</p></div></div>{reportItems.length===0?<div className="empty">Belum ada produk terjual.</div>:<div className="table-wrap"><table><thead><tr><th>PRODUK</th><th>UNIT</th><th>OMZET</th></tr></thead><tbody>{reportItems.slice(0,10).map(row=><tr key={row.name+row.category}><td><b>{row.name}</b><small>{row.category}</small></td><td>{row.quantity}</td><td className="amount">{money(row.revenue)}</td></tr>)}</tbody></table></div>}</section></div>
           <section className="panel"><div className="panel-head"><div><h3>Riwayat transaksi</h3><p>Hingga 500 transaksi terbaru dari cabang aktif.</p></div></div><div className="table-wrap"><table><thead><tr><th>INVOICE</th><th>TANGGAL</th><th>STATUS</th><th>JUMLAH ITEM</th><th>TOTAL</th></tr></thead><tbody>{reportSales.map(s=><tr key={s.id}><td>{s.invoice_no}</td><td>{new Date(s.created_at).toLocaleString("id-ID")}</td><td><span className="badge green">LUNAS</span></td><td>{(s.sale_items||[]).reduce((n,item)=>n+Number(item.quantity),0)}</td><td className="amount">{money(s.total)}</td></tr>)}</tbody></table></div>{reportSales.length===0&&<div className="empty">Belum ada transaksi lunas pada periode ini.</div>}</section></>}
