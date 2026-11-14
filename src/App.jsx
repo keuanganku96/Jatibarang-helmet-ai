@@ -49,11 +49,13 @@ export default function App() {
   const [expenseForm,setExpenseForm] = useState({category:"Operasional",description:"",amount:""});
   const [cart,setCart] = useState([]);
   const [search,setSearch] = useState("");
+  const [continuousScan,setContinuousScan] = useState(true);
+  const [customerScan,setCustomerScan] = useState("");
   const [payment,setPayment] = useState("Tunai");
   const [customerId,setCustomerId] = useState("");
   const [showProductForm,setShowProductForm] = useState(false);
   const [showCustomerForm,setShowCustomerForm] = useState(false);
-  const [productForm,setProductForm] = useState({name:"",sku:"",barcode:"",category:"Helm",unit:"pcs",cost_price:"",selling_price:"",min_stock:"3",initial_quantity:"0"});
+  const [productForm,setProductForm] = useState({name:"",sku:"",barcode:"",category:"Helm",unit:"pcs",cost_price:"",selling_price:"",discount_type:"none",discount_value:"0",min_stock:"3",initial_quantity:"0"});
   const [customerForm,setCustomerForm] = useState({name:"",phone:"",email:"",address:""});
   const [showSupplierForm,setShowSupplierForm] = useState(false);
   const [supplierForm,setSupplierForm] = useState({name:"",phone:"",email:"",address:""});
@@ -81,10 +83,10 @@ export default function App() {
         supabase.from("businesses").select("id,name,currency,timezone").eq("id",businessId).single(),
         supabase.from("branches").select("id,name,is_active").eq("business_id",businessId).eq("is_active",true).order("name"),
         supabase.from("warehouses").select("id,name,branch_id,is_active").eq("business_id",businessId).eq("is_active",true).order("name"),
-        supabase.from("products").select("id,business_id,category_id,sku,barcode,name,unit,cost_price,selling_price,min_stock,is_active").eq("business_id",businessId).eq("is_active",true).order("name"),
+        supabase.from("products").select("id,business_id,category_id,sku,barcode,name,unit,cost_price,selling_price,min_stock,discount_type,discount_value,is_active").eq("business_id",businessId).eq("is_active",true).order("name"),
         supabase.from("inventory").select("product_id,warehouse_id,quantity").eq("business_id",businessId),
         supabase.from("categories").select("id,name").eq("business_id",businessId).order("name"),
-        supabase.from("customers").select("id,name,phone,email,address").eq("business_id",businessId).order("name"),
+        supabase.from("customers").select("id,name,customer_code,phone,email,address").eq("business_id",businessId).order("name"),
         (branchId ? supabase.from("sales").select("id,invoice_no,status,total,created_at,customer_id,sale_items(quantity)").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("sales").select("id,invoice_no,status,total,created_at,customer_id,sale_items(quantity)").eq("business_id",businessId)).order("created_at",{ascending:false}).limit(100),
         supabase.from("suppliers").select("id,name,phone,email,address").eq("business_id",businessId).order("name"),
         (branchId ? supabase.from("purchase_orders").select("id,purchase_no,status,total,created_at,suppliers(name),purchase_items(quantity)").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("purchase_orders").select("id,purchase_no,status,total,created_at,suppliers(name),purchase_items(quantity)").eq("business_id",businessId)).order("created_at",{ascending:false}).limit(100),
@@ -112,7 +114,7 @@ export default function App() {
       }
       setBusiness(bizRes.data); setMembership(member); setBranches(accessibleBranches); setWarehouses(warehouseRes.data);
       setBranchId(activeBranch?.id||""); setWarehouseId(activeWarehouse?.id||"");
-      setProducts(productRes.data.map(p=>({...p,category:categoryMap[p.category_id]||"Umum",stock:stockMap[p.id]||0,price:Number(p.selling_price),cost:Number(p.cost_price),min:Number(p.min_stock)})));
+      setProducts(productRes.data.map(p=>({...p,category:categoryMap[p.category_id]||"Umum",stock:stockMap[p.id]||0,price:Number(p.selling_price),cost:Number(p.cost_price),min:Number(p.min_stock),discountType:p.discount_type||"none",discountValue:Number(p.discount_value)||0})));
       setCustomers(customerRes.data); setSales(salesRes.data);
       setSuppliers(suppliersRes.data); setPurchases(purchasesRes.data); setCashEntries(cashRes.data||[]);
     } catch(e) { setError(e.message||"Gagal memuat data toko."); }
@@ -127,7 +129,9 @@ export default function App() {
   async function logout(){await supabase.auth.signOut();setBusiness(null);setProducts([]);setCustomers([]);setSales([]);setCart([]);}
 
   const filteredProducts = useMemo(()=>products.filter(p=>(p.name+" "+(p.sku||"")+" "+p.category).toLowerCase().includes(search.toLowerCase())),[products,search]);
-  const cartTotal = cart.reduce((sum,item)=>sum+item.price*item.qty,0);
+  const cartSubtotal = cart.reduce((sum,item)=>sum+item.price*item.qty,0);
+  const cartDiscount = cart.reduce((sum,item)=>sum+(Number(item.discountAmount)||0),0);
+  const cartTotal = Math.max(0,cartSubtotal-cartDiscount);
   const todayKey = new Date().toLocaleDateString("en-CA",{timeZone:"Asia/Jakarta"});
   const todaySales = sales.filter(s=>new Date(s.created_at).toLocaleDateString("en-CA",{timeZone:"Asia/Jakarta"})===todayKey);
   const revenue = todaySales.reduce((sum,s)=>sum+Number(s.total),0);
@@ -136,7 +140,27 @@ export default function App() {
 
   function addCart(product){
     if(!product||product.stock<=0){setNotice("Stok produk habis.");return;}
-    setCart(old=>{const found=old.find(x=>x.id===product.id);if(found){if(found.qty>=product.stock){setNotice("Jumlah melebihi stok tersedia.");return old;}return old.map(x=>x.id===product.id?{...x,qty:x.qty+1}:x);}return [...old,{...product,qty:1}];});
+    const unitDiscount=product.discountType==="percent"?product.price*product.discountValue/100:product.discountType==="fixed"?Math.min(product.price,product.discountValue):0;
+    setCart(old=>{const found=old.find(x=>x.id===product.id);if(found){if(found.qty>=product.stock){setNotice("Jumlah melebihi stok tersedia.");return old;}return old.map(x=>x.id===product.id?{...x,qty:x.qty+1,discountAmount:(Number(x.discountAmount)||0)+unitDiscount}:x);}return [...old,{...product,qty:1,discountAmount:unitDiscount}];});
+  }
+
+  function scanProduct(e){
+    if(e.key!=="Enter")return;
+    e.preventDefault();
+    const code=search.trim().toLowerCase();
+    if(!code)return;
+    const match=products.find(p=>(p.barcode||"").toLowerCase()===code||(p.sku||"").toLowerCase()===code);
+    if(match){addCart(match);setNotice("Barcode "+(match.barcode||match.sku)+" ditambahkan: "+match.name);setSearch("");if(continuousScan)setTimeout(()=>document.getElementById("pos-barcode-input")?.focus(),50);}
+    else setNotice("Barcode/SKU tidak ditemukan: "+search);
+  }
+
+  function scanCustomer(e){
+    if(e.key!=="Enter")return;
+    e.preventDefault();
+    const code=customerScan.trim().toLowerCase();
+    const found=customers.find(c=>(c.customer_code||"").toLowerCase()===code||c.id.toLowerCase()===code);
+    if(found){setCustomerId(found.id);setNotice("Pelanggan ditemukan: "+found.name);setCustomerScan("");}
+    else setNotice("ID pelanggan tidak ditemukan.");
   }
 
   async function checkout(){
@@ -144,7 +168,7 @@ export default function App() {
     setBusy(true);setError("");
     const {data,error:checkoutError}=await supabase.rpc("checkout_sale",{
       p_business_id:business.id,p_branch_id:branchId,p_warehouse_id:warehouseId,
-      p_customer_id:customerId||null,p_items:cart.map(item=>({product_id:item.id,quantity:item.qty})),
+      p_customer_id:customerId||null,p_items:cart.map(item=>({product_id:item.id,quantity:item.qty,discount_amount:Number(item.discountAmount)||0})),
       p_payment_method:payment
     });
     if(checkoutError){setError(checkoutError.message);setBusy(false);return;}
@@ -163,7 +187,7 @@ export default function App() {
     });
     setBusy(false);
     if(saveError){setError(saveError.message);return;}
-    setShowProductForm(false);setProductForm({name:"",sku:"",barcode:"",category:"Helm",unit:"pcs",cost_price:"",selling_price:"",min_stock:"3",initial_quantity:"0"});
+    setShowProductForm(false);setProductForm({name:"",sku:"",barcode:"",category:"Helm",unit:"pcs",cost_price:"",selling_price:"",discount_type:"none",discount_value:"0",min_stock:"3",initial_quantity:"0"});
     setNotice("Produk dan stok awal tersimpan.");await loadData();
   }
 
@@ -249,18 +273,18 @@ export default function App() {
             <section className="panel"><div className="panel-head"><div><h3>Perhatian stok</h3><p>Produk yang perlu dipantau</p></div><button className="text-btn" onClick={()=>setPage("Produk & Stok")}>Kelola →</button></div>
               {products.filter(p=>p.stock<=p.min).length===0?<div className="empty">Semua stok aman.</div>:products.filter(p=>p.stock<=p.min).map(p=><div className="stock-row" key={p.id}><div><b>{p.name}</b><small>{p.sku||"Tanpa SKU"}</small></div><span className={p.stock===0?"badge red":"badge yellow"}>{p.stock===0?"Habis":p.stock+" tersisa"}</span></div>)}</section></div></>}
         {page==="Kasir"&&<><div className="welcome"><div><span className="eyebrow">POINT OF SALE</span><h1>Kasir</h1><p>Transaksi langsung tercatat ke database cloud.</p></div></div>
-          <div className="pos-layout"><section className="panel"><div className="searchbar"><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Cari nama produk, SKU, atau barcode..."/></div>
+          <div className="pos-layout"><section className="panel"><div className="searchbar"><input id="pos-barcode-input" value={search} onChange={e=>setSearch(e.target.value)} onKeyDown={scanProduct} placeholder="Scan barcode / cari nama, SKU..."/><label className="scan-toggle"><input type="checkbox" checked={continuousScan} onChange={e=>setContinuousScan(e.target.checked)}/> Continuous scan</label></div>
             <div className="product-grid">{filteredProducts.map(p=><button className="product-tile" key={p.id} onClick={()=>addCart(p)} disabled={p.stock<=0}><span className="product-symbol">◇</span><b>{p.name}</b><small>{p.sku||"Tanpa SKU"} · Stok {p.stock}</small><strong>{money(p.price)}</strong></button>)}</div>
             {filteredProducts.length===0&&<div className="empty">Belum ada produk. Tambahkan produk melalui menu Produk & Stok.</div>}</section>
             <section className="panel cart-panel"><div className="panel-head"><div><h3>Keranjang</h3><p>{cart.reduce((a,c)=>a+c.qty,0)} item dipilih</p></div><button className="text-btn" onClick={()=>setCart([])}>Kosongkan</button></div>
-              {cart.length===0?<div className="empty">Keranjang masih kosong.</div>:cart.map(item=><div className="cart-row" key={item.id}><div><b>{item.name}</b><small>{money(item.price)} / item</small></div><div className="qty"><button onClick={()=>setCart(old=>old.map(x=>x.id===item.id?{...x,qty:x.qty-1}:x).filter(x=>x.qty>0))}>−</button>{item.qty}<button onClick={()=>addCart(products.find(p=>p.id===item.id))}>＋</button></div></div>)}
-              <div className="checkout-fields"><label>Pelanggan<select value={customerId} onChange={e=>setCustomerId(e.target.value)}><option value="">Pelanggan umum</option>{customers.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+              {cart.length===0?<div className="empty">Keranjang masih kosong.</div>:cart.map(item=><div className="cart-row" key={item.id}><div><b>{item.name}</b><small>{money(item.price)} / item · Diskon {money(item.discountAmount||0)}</small><label className="discount-edit">Diskon total (Rp)<input type="number" min="0" max={item.price*item.qty} value={item.discountAmount||0} onChange={e=>setCart(old=>old.map(x=>x.id===item.id?{...x,discountAmount:Math.min(x.price*x.qty,Math.max(0,Number(e.target.value)||0))}:x))}/></label></div><div className="qty"><button onClick={()=>setCart(old=>old.map(x=>x.id===item.id?{...x,qty:x.qty-1,discountAmount:x.qty>1?Math.min(x.discountAmount||0,x.price*(x.qty-1)):0}:x).filter(x=>x.qty>0))}>−</button>{item.qty}<button onClick={()=>addCart(products.find(p=>p.id===item.id))}>＋</button></div></div>)}
+              <div className="checkout-fields"><label>Scan ID pelanggan<input value={customerScan} onChange={e=>setCustomerScan(e.target.value)} onKeyDown={scanCustomer} placeholder="Scan barcode ID member lalu Enter"/></label><label>Pelanggan<select value={customerId} onChange={e=>setCustomerId(e.target.value)}><option value="">Pelanggan umum</option>{customers.map(c=><option key={c.id} value={c.id}>{c.name} · {c.customer_code||c.id.slice(0,8)}</option>)}</select></label>
                 <label>Metode pembayaran<select value={payment} onChange={e=>setPayment(e.target.value)}><option>Tunai</option><option>Transfer bank</option><option>QRIS</option><option>Debit</option></select></label></div>
-              <div className="total-line"><span>Total</span><strong>{money(cartTotal)}</strong></div><button className="primary full" disabled={!cart.length||busy||!warehouseId} onClick={checkout}>Selesaikan transaksi</button>
+              <div className="total-line"><span>Subtotal</span><strong>{money(cartSubtotal)}</strong></div><div className="total-line"><span>Diskon</span><strong>− {money(cartDiscount)}</strong></div><div className="total-line"><span>Total bayar</span><strong>{money(cartTotal)}</strong></div><button className="primary full" disabled={!cart.length||busy||!warehouseId} onClick={checkout}>Selesaikan transaksi</button>
             </section></div></>}
         {page==="Produk & Stok"&&<><div className="welcome"><div><span className="eyebrow">INVENTARIS</span><h1>Produk & Stok</h1><p>Katalog dan jumlah stok dari gudang Supabase.</p></div><button className="primary" onClick={()=>setShowProductForm(v=>!v)}>＋ Tambah produk</button></div>
-          {showProductForm&&<form className="panel form-grid" onSubmit={saveProduct}><label>Nama produk<input required value={productForm.name} onChange={e=>setProductForm({...productForm,name:e.target.value})}/></label><label>SKU<input value={productForm.sku} onChange={e=>setProductForm({...productForm,sku:e.target.value})}/></label><label>Barcode<input value={productForm.barcode} onChange={e=>setProductForm({...productForm,barcode:e.target.value})}/></label><label>Kategori<input value={productForm.category} onChange={e=>setProductForm({...productForm,category:e.target.value})}/></label><label>Harga modal<input type="number" min="0" required value={productForm.cost_price} onChange={e=>setProductForm({...productForm,cost_price:e.target.value})}/></label><label>Harga jual<input type="number" min="0" required value={productForm.selling_price} onChange={e=>setProductForm({...productForm,selling_price:e.target.value})}/></label><label>Stok minimum<input type="number" min="0" value={productForm.min_stock} onChange={e=>setProductForm({...productForm,min_stock:e.target.value})}/></label><label>Stok awal<input type="number" min="0" value={productForm.initial_quantity} onChange={e=>setProductForm({...productForm,initial_quantity:e.target.value})}/></label><div className="form-actions"><button className="primary" disabled={busy}>Simpan produk</button><button type="button" className="secondary" onClick={()=>setShowProductForm(false)}>Batal</button></div></form>}
-          <section className="panel"><div className="searchbar"><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Cari produk..."/></div><div className="table-wrap"><table><thead><tr><th>PRODUK</th><th>SKU</th><th>KATEGORI</th><th>HARGA JUAL</th><th>STOK</th><th>STATUS</th></tr></thead><tbody>{filteredProducts.map(p=><tr key={p.id}><td><b>{p.name}</b></td><td>{p.sku||"—"}</td><td>{p.category}</td><td>{money(p.price)}</td><td>{p.stock}</td><td><span className={p.stock<=0?"badge red":p.stock<=p.min?"badge yellow":"badge green"}>{p.stock<=0?"Habis":p.stock<=p.min?"Menipis":"Aman"}</span></td></tr>)}</tbody></table></div>{products.length===0&&<div className="empty">Belum ada produk di database.</div>}</section></>}
+          {showProductForm&&<form className="panel form-grid" onSubmit={saveProduct}><label>Nama produk<input required value={productForm.name} onChange={e=>setProductForm({...productForm,name:e.target.value})}/></label><label>SKU<input value={productForm.sku} onChange={e=>setProductForm({...productForm,sku:e.target.value})}/></label><label>Barcode<input value={productForm.barcode} onChange={e=>setProductForm({...productForm,barcode:e.target.value})}/></label><label>Kategori<input value={productForm.category} onChange={e=>setProductForm({...productForm,category:e.target.value})}/></label><label>Harga modal<input type="number" min="0" required value={productForm.cost_price} onChange={e=>setProductForm({...productForm,cost_price:e.target.value})}/></label><label>Harga jual<input type="number" min="0" required value={productForm.selling_price} onChange={e=>setProductForm({...productForm,selling_price:e.target.value})}/></label><label>Jenis diskon<select value={productForm.discount_type} onChange={e=>setProductForm({...productForm,discount_type:e.target.value})}><option value="none">Tanpa diskon</option><option value="percent">Persentase (%)</option><option value="fixed">Nominal (Rp) per barang</option></select></label><label>Nilai diskon<input type="number" min="0" max={productForm.discount_type==="percent"?100:undefined} value={productForm.discount_value} onChange={e=>setProductForm({...productForm,discount_value:e.target.value})}/></label><label>Stok minimum<input type="number" min="0" value={productForm.min_stock} onChange={e=>setProductForm({...productForm,min_stock:e.target.value})}/></label><label>Stok awal<input type="number" min="0" value={productForm.initial_quantity} onChange={e=>setProductForm({...productForm,initial_quantity:e.target.value})}/></label><div className="form-actions"><button className="primary" disabled={busy}>Simpan produk</button><button type="button" className="secondary" onClick={()=>setShowProductForm(false)}>Batal</button></div></form>}
+          <section className="panel"><div className="searchbar"><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Cari produk..."/></div><div className="table-wrap"><table><thead><tr><th>PRODUK</th><th>SKU</th><th>KATEGORI</th><th>HARGA JUAL</th><th>DISKON</th><th>STOK</th><th>STATUS</th></tr></thead><tbody>{filteredProducts.map(p=><tr key={p.id}><td><b>{p.name}</b></td><td>{p.sku||"—"}</td><td>{p.category}</td><td>{money(p.price)}</td><td>{p.discountType==="percent"?p.discountValue+"%":p.discountType==="fixed"?money(p.discountValue):"—"}</td><td>{p.stock}</td><td><span className={p.stock<=0?"badge red":p.stock<=p.min?"badge yellow":"badge green"}>{p.stock<=0?"Habis":p.stock<=p.min?"Menipis":"Aman"}</span></td></tr>)}</tbody></table></div>{products.length===0&&<div className="empty">Belum ada produk di database.</div>}</section></>}
         {page==="Pemasok"&&<><div className="welcome"><div><span className="eyebrow">MITRA TOKO</span><h1>Pemasok</h1><p>Kelola data pemasok untuk pencatatan pembelian.</p></div><button className="primary" onClick={()=>setShowSupplierForm(v=>!v)}>＋ Tambah pemasok</button></div>
           {showSupplierForm&&<form className="panel form-grid" onSubmit={saveSupplier}><label>Nama pemasok<input required value={supplierForm.name} onChange={e=>setSupplierForm({...supplierForm,name:e.target.value})}/></label><label>Nomor telepon<input value={supplierForm.phone} onChange={e=>setSupplierForm({...supplierForm,phone:e.target.value})}/></label><label>Email<input type="email" value={supplierForm.email} onChange={e=>setSupplierForm({...supplierForm,email:e.target.value})}/></label><label>Alamat<input value={supplierForm.address} onChange={e=>setSupplierForm({...supplierForm,address:e.target.value})}/></label><div className="form-actions"><button className="primary" disabled={busy}>Simpan pemasok</button><button type="button" className="secondary" onClick={()=>setShowSupplierForm(false)}>Batal</button></div></form>}
           <section className="panel"><div className="table-wrap"><table><thead><tr><th>NAMA PEMASOK</th><th>TELEPON</th><th>EMAIL</th><th>ALAMAT</th></tr></thead><tbody>{suppliers.map(s=><tr key={s.id}><td><b>{s.name}</b></td><td>{s.phone||"—"}</td><td>{s.email||"—"}</td><td>{s.address||"—"}</td></tr>)}</tbody></table></div>{suppliers.length===0&&<div className="empty">Belum ada data pemasok.</div>}</section></>}
@@ -271,7 +295,7 @@ export default function App() {
           <section className="panel"><div className="panel-head"><div><h3>Riwayat pembelian</h3><p>100 transaksi pembelian terakhir</p></div></div><div className="table-wrap"><table><thead><tr><th>NOMOR</th><th>PEMASOK</th><th>TANGGAL</th><th>STATUS</th><th>TOTAL</th></tr></thead><tbody>{purchases.map(p=><tr key={p.id}><td>{p.purchase_no}</td><td>{p.suppliers?.name||"—"}</td><td>{new Date(p.created_at).toLocaleString("id-ID")}</td><td><span className="badge green">{p.status}</span></td><td>{money(p.total)}</td></tr>)}</tbody></table></div>{purchases.length===0&&<div className="empty">Belum ada riwayat pembelian.</div>}</section></>}
         {page==="Pelanggan"&&<><div className="welcome"><div><span className="eyebrow">CRM</span><h1>Pelanggan</h1><p>Data pelanggan tersimpan di cloud.</p></div><button className="primary" onClick={()=>setShowCustomerForm(v=>!v)}>＋ Tambah pelanggan</button></div>
           {showCustomerForm&&<form className="panel form-grid" onSubmit={saveCustomer}><label>Nama pelanggan<input required value={customerForm.name} onChange={e=>setCustomerForm({...customerForm,name:e.target.value})}/></label><label>Nomor telepon<input value={customerForm.phone} onChange={e=>setCustomerForm({...customerForm,phone:e.target.value})}/></label><label>Email<input type="email" value={customerForm.email} onChange={e=>setCustomerForm({...customerForm,email:e.target.value})}/></label><label>Alamat<input value={customerForm.address} onChange={e=>setCustomerForm({...customerForm,address:e.target.value})}/></label><div className="form-actions"><button className="primary" disabled={busy}>Simpan pelanggan</button></div></form>}
-          <section className="panel"><div className="table-wrap"><table><thead><tr><th>NAMA</th><th>TELEPON</th><th>EMAIL</th><th>ALAMAT</th></tr></thead><tbody>{customers.map(c=><tr key={c.id}><td><b>{c.name}</b></td><td>{c.phone||"—"}</td><td>{c.email||"—"}</td><td>{c.address||"—"}</td></tr>)}</tbody></table></div>{customers.length===0&&<div className="empty">Belum ada data pelanggan.</div>}</section></>}
+          <section className="panel"><div className="table-wrap"><table><thead><tr><th>ID BARCODE</th><th>NAMA</th><th>TELEPON</th><th>EMAIL</th><th>ALAMAT</th></tr></thead><tbody>{customers.map(c=><tr key={c.id}><td><code>{c.customer_code||("JH"+c.id.replaceAll("-","").slice(0,12).toUpperCase())}</code></td><td><b>{c.name}</b></td><td>{c.phone||"—"}</td><td>{c.email||"—"}</td><td>{c.address||"—"}</td></tr>)}</tbody></table></div>{customers.length===0&&<div className="empty">Belum ada data pelanggan.</div>}</section></>}
         {page==="Laporan"&&<><div className="welcome"><div><span className="eyebrow">ANALITIK</span><h1>Laporan Penjualan</h1><p>Transaksi yang tercatat pada database.</p></div><button className="secondary" onClick={()=>{const rows=[["Invoice","Status","Tanggal","Total"],...sales.map(s=>[s.invoice_no,s.status,s.created_at,s.total])];const csv=rows.map(row=>row.map(v=>'"'+String(v??"").replaceAll('"','""')+'"').join(",")).join("\n");const a=document.createElement("a");a.href=URL.createObjectURL(new Blob(["\ufeff"+csv],{type:"text/csv;charset=utf-8"}));a.download="laporan-smart-pos.csv";a.click();URL.revokeObjectURL(a.href);}}>↓ Ekspor CSV</button></div>
           <div className="stats">{card("Total transaksi",sales.length,"Data cloud","▣")}{card("Total penjualan",money(sales.reduce((a,s)=>a+Number(s.total),0)),"Semua waktu","↗")}{card("Penjualan hari ini",money(revenue),todayKey,"▦")}{card("Rata-rata transaksi",money(sales.length?sales.reduce((a,s)=>a+Number(s.total),0)/sales.length:0),"Per transaksi","◷")}</div>
           <section className="panel"><div className="table-wrap"><table><thead><tr><th>INVOICE</th><th>TANGGAL</th><th>STATUS</th><th>JUMLAH ITEM</th><th>TOTAL</th></tr></thead><tbody>{sales.map(s=><tr key={s.id}><td>{s.invoice_no}</td><td>{new Date(s.created_at).toLocaleString("id-ID")}</td><td>{s.status}</td><td>{(s.sale_items||[]).reduce((n,item)=>n+Number(item.quantity),0)}</td><td className="amount">{money(s.total)}</td></tr>)}</tbody></table></div>{sales.length===0&&<div className="empty">Belum ada transaksi.</div>}</section></>}
