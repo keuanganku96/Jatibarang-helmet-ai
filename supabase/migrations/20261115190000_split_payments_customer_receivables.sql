@@ -151,3 +151,6 @@ begin
  execute v_def;
 end;
 $block$;
+
+create index if not exists sales_receivables_branch_due_idx on public.sales(business_id,branch_id,due_date,created_at) where status='partial';
+create index if not exists sale_payments_sale_completed_idx on public.sale_payments(sale_id,created_at) where payment_status='completed';
