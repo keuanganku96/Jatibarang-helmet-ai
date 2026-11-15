@@ -103,7 +103,7 @@ export default function App() {
   const [productImageFile,setProductImageFile] = useState(null);
   const [productImagePreview,setProductImagePreview] = useState("");
   const [showCustomerForm,setShowCustomerForm] = useState(false);
-  const [productForm,setProductForm] = useState({name:"",sku:"",barcode:"",category:"Helm",unit:"pcs",cost_price:"",selling_price:"",discount_type:"none",discount_value:"0",min_stock:"3",initial_quantity:"0",warranty_months:"0",warranty_coverage_percent:"0",warranty_max_amount:"",warranty_min_claim:"0",warranty_max_claims:"1",warranty_terms:"",image_url:""});
+  const [productForm,setProductForm] = useState({name:"",sku:"",barcode:"",category:"Helm",unit:"pcs",cost_price:"",selling_price:"",discount_type:"none",discount_value:"0",commission_type:"inherit",commission_value:"0",min_stock:"3",initial_quantity:"0",warranty_months:"0",warranty_coverage_percent:"0",warranty_max_amount:"",warranty_min_claim:"0",warranty_max_claims:"1",warranty_terms:"",image_url:""});
   const [customerForm,setCustomerForm] = useState({name:"",phone:"",email:"",address:""});
   const [showSupplierForm,setShowSupplierForm] = useState(false);
   const [supplierForm,setSupplierForm] = useState({name:"",phone:"",email:"",address:""});
@@ -359,7 +359,7 @@ export default function App() {
     const endAt=reportRange.end||new Date();
     const startAt=reportRange.start?reportRange.start.toISOString():null;
     setProfitLossLoading(true);
-    supabase.rpc("get_profit_loss_summary",{
+    supabase.rpc("get_profit_loss_summary_v2",{
       p_business_id:business.id,
       p_branch_id:branchId,
       p_start_at:startAt,
@@ -492,12 +492,13 @@ export default function App() {
   }
 
   function beginEditProduct(product){
+    const productRule=commissionRules.filter(r=>r.product_id===product.id).sort((a,b)=>Number(b.branch_id===branchId)-Number(a.branch_id===branchId))[0];
     setEditingProductId(product.id);
     setProductForm({
       name:product.name||"",sku:product.sku||"",barcode:product.barcode||"",category:product.category||"Umum",
       unit:product.unit||"pcs",cost_price:String(product.cost_price??product.cost??0),
       selling_price:String(product.selling_price??product.price??0),discount_type:product.discount_type||product.discountType||"none",
-      discount_value:String(product.discount_value??product.discountValue??0),min_stock:String(product.min_stock??product.min??0),
+      discount_value:String(product.discount_value??product.discountValue??0),commission_type:productRule?(productRule.is_active?productRule.commission_type:"inherit"):"inherit",commission_value:String(productRule?.commission_value??0),min_stock:String(product.min_stock??product.min??0),
       initial_quantity:"0",warranty_months:String(product.warranty_months??0),
       warranty_coverage_percent:String(product.warranty_coverage_percent??0),
       warranty_max_amount:product.warranty_max_amount==null?"":String(product.warranty_max_amount),
@@ -510,7 +511,7 @@ export default function App() {
 
   function resetProductForm(){
     setEditingProductId("");setProductImageFile(null);setProductImagePreview("");
-    setProductForm({name:"",sku:"",barcode:"",category:"Helm",unit:"pcs",cost_price:"",selling_price:"",discount_type:"none",discount_value:"0",min_stock:"3",initial_quantity:"0",warranty_months:"0",warranty_coverage_percent:"0",warranty_max_amount:"",warranty_min_claim:"0",warranty_max_claims:"1",warranty_terms:"",image_url:""});
+    setProductForm({name:"",sku:"",barcode:"",category:"Helm",unit:"pcs",cost_price:"",selling_price:"",discount_type:"none",discount_value:"0",commission_type:"inherit",commission_value:"0",min_stock:"3",initial_quantity:"0",warranty_months:"0",warranty_coverage_percent:"0",warranty_max_amount:"",warranty_min_claim:"0",warranty_max_claims:"1",warranty_terms:"",image_url:""});
     setShowProductForm(false);
   }
 
@@ -559,6 +560,7 @@ export default function App() {
   async function saveProduct(e){
     e.preventDefault();setBusy(true);setError("");
     try{
+      let savedProductId=editingProductId;
       if(editingProductId){
         const imageUrl=await uploadProductImage(editingProductId);
         const {error:saveError}=await updateProductRecord(editingProductId,imageUrl);
@@ -578,12 +580,22 @@ export default function App() {
           p_warranty_terms:productForm.warranty_terms||null
         });
         if(saveError)throw saveError;
+        savedProductId=productId;
         if(productImageFile){
           const imageUrl=await uploadProductImage(productId);
           const {error:imageSaveError}=await updateProductRecord(productId,imageUrl);
           if(imageSaveError)throw imageSaveError;
         }
         setNotice("Produk dan stok awal berhasil disimpan.");
+      }
+      if(["owner","admin"].includes(membership?.role)&&savedProductId){
+        const existingRule=commissionRules.filter(r=>r.product_id===savedProductId).sort((a,b)=>Number(b.branch_id===branchId)-Number(a.branch_id===branchId))[0];
+        const {error:commissionError}=await supabase.rpc("save_commission_rule",{
+          p_branch_id:existingRule?.branch_id??null,p_product_id:savedProductId,
+          p_commission_type:productForm.commission_type==="inherit"?"none":productForm.commission_type,
+          p_commission_value:Number(productForm.commission_value)||0,p_is_active:productForm.commission_type!=="inherit"
+        });
+        if(commissionError)throw new Error("Produk tersimpan, tetapi komisi belum tersimpan: "+commissionError.message);
       }
       resetProductForm();await loadData();
     }catch(saveError){setError(saveError.message||"Gagal menyimpan produk.");}
@@ -718,6 +730,7 @@ export default function App() {
             <label>Harga jual<input type="number" min="0" required value={productForm.selling_price} onChange={e=>setProductForm({...productForm,selling_price:e.target.value})}/></label>
             <label>Jenis diskon<select value={productForm.discount_type} onChange={e=>setProductForm({...productForm,discount_type:e.target.value})}><option value="none">Tanpa diskon</option><option value="percent">Persentase (%)</option><option value="fixed">Nominal (Rp) per barang</option></select></label>
             <label>Nilai diskon<input type="number" min="0" max={productForm.discount_type==="percent"?100:undefined} value={productForm.discount_value} onChange={e=>setProductForm({...productForm,discount_value:e.target.value})}/></label>
+            {["owner","admin"].includes(membership?.role)&&<><div className="form-section-title">Komisi penjualan produk</div><div className="notice span-2">Komisi otomatis dihitung saat produk terjual dan transaksi lunas. Komisi menjadi beban penjualan yang mengurangi laba bersih, bukan menambah HPP barang. Pembayaran komisi nanti dicatat sebagai arus kas tanpa mengurangi laba dua kali.</div><label>Aturan komisi<select value={productForm.commission_type} onChange={e=>setProductForm({...productForm,commission_type:e.target.value})}><option value="inherit">Ikuti komisi default karyawan</option><option value="none">Tidak ada komisi untuk produk ini</option><option value="percent">Persentase dari nilai penjualan (%)</option><option value="per_unit">Nominal tetap per unit (Rp)</option></select></label><label>{productForm.commission_type==="percent"?"Komisi (%)":"Komisi per unit (Rp)"}<input type="number" min="0" max={productForm.commission_type==="percent"?100:100000000} step="0.01" disabled={["inherit","none"].includes(productForm.commission_type)} value={productForm.commission_value} onChange={e=>setProductForm({...productForm,commission_value:e.target.value})}/></label></>}
             <label>Stok minimum<input type="number" min="0" value={productForm.min_stock} onChange={e=>setProductForm({...productForm,min_stock:e.target.value})}/></label>
             {!editingProductId&&<label>Stok awal<input type="number" min="0" value={productForm.initial_quantity} onChange={e=>setProductForm({...productForm,initial_quantity:e.target.value})}/></label>}
             {editingProductId&&<div className="notice">Edit produk tidak mengubah stok. Gunakan menu Stok Opname atau Transfer Stok untuk penyesuaian persediaan.</div>}
@@ -782,7 +795,7 @@ export default function App() {
             {reportDaily.every(x=>x.revenue===0)?<div className="empty">Belum ada penjualan lunas pada periode ini.</div>:<div className="chart-scroll"><div className="chart-bars">{reportDaily.map(row=><div className="chart-column" key={row.key} title={row.key+" · "+money(row.revenue)}><strong>{row.revenue?money(row.revenue):"—"}</strong><div className="chart-bar-track"><span style={{height:Math.max(3,reportDaily.length?row.revenue/Math.max(...reportDaily.map(x=>x.revenue),1)*100:0)+"%"}}/></div><small>{row.label}</small></div>)}</div></div>}
           </section>
           <div className="grid-two"><section className="panel"><div className="panel-head"><div><h3>Laporan laba rugi</h3><p>HPP memakai snapshot modal saat transaksi. Pembayaran hutang supplier tidak dihitung sebagai beban operasional.</p></div><span className="badge">{profitLossLoading?"Memuat...":"Cabang aktif"}</span></div>
-            <div className="stats">{card("Penjualan bersih",money(profitLoss?.revenue||0),"Transaksi berstatus lunas","↗")}{card("HPP",Number(profitLoss?.missing_cost_items||0)>0?"Belum lengkap":money(profitLoss?.hpp||0),"Harga pokok barang terjual","▤")}{card("Laba kotor",profitLoss?.gross_profit==null?"Belum dapat dihitung":money(profitLoss.gross_profit),"Penjualan bersih − HPP","＋")}{card("Beban operasional",money(profitLoss?.operating_expenses||0),"Tidak termasuk pembayaran supplier","↘")}{card("Pendapatan lain",money(profitLoss?.other_income||0),"Kategori Pendapatan lain","＋")}{card("Laba bersih",profitLoss?.net_profit==null?"Belum dapat dihitung":money(profitLoss.net_profit),"Laba kotor − beban + pendapatan lain","＝")}</div>
+            <div className="stats">{card("Penjualan bersih",money(profitLoss?.revenue||0),"Transaksi berstatus lunas","↗")}{card("HPP",Number(profitLoss?.missing_cost_items||0)>0?"Belum lengkap":money(profitLoss?.hpp||0),"Harga pokok barang terjual","▤")}{card("Laba kotor",profitLoss?.gross_profit==null?"Belum dapat dihitung":money(profitLoss.gross_profit),"Penjualan bersih − HPP","＋")}{card("Komisi penjualan",money(profitLoss?.commission_expenses||0),"Beban saat produk terjual","Rp")}{card("Beban operasional",money(profitLoss?.operating_expenses||0),"Di luar komisi dan pembayaran supplier","↘")}{card("Pendapatan lain",money(profitLoss?.other_income||0),"Kategori Pendapatan lain","＋")}{card("Laba bersih",profitLoss?.net_profit==null?"Belum dapat dihitung":money(profitLoss.net_profit),"Laba kotor − komisi − beban + pendapatan lain","＝")}</div>
             {Number(profitLoss?.missing_cost_items||0)>0&&<div className="notice warning-note">Ada {profitLoss.missing_cost_items} item dari {profitLoss.missing_cost_sales} transaksi lama yang belum memiliki snapshot modal. Laba historis tersebut tidak dihitung agar tidak menyesatkan.</div>}
           </section>
           <section className="panel"><div className="panel-head"><div><h3>Metode pembayaran</h3><p>Total nominal pembayaran untuk transaksi lunas.</p></div></div>
