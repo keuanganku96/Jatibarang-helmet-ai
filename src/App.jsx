@@ -399,24 +399,28 @@ export default function App() {
   const reportCashEntries = useMemo(()=>cashEntries.filter(x=>{const d=new Date(x.created_at);return (!reportRange.start||d>=reportRange.start)&&(!reportRange.end||d<=reportRange.end);}),[cashEntries,reportRange]);
   const reportCommissionByStaff = useMemo(()=>{
     const rows=new Map();
-    for(const x of commissionLedger.filter(x=>x.branch_id===branchId)){const row=rows.get(x.staff_user_id)||{user_id:x.staff_user_id,pending:0,paid:0,total:0};const amount=Number(x.commission_amount)||0;if(x.status==="paid")row.paid+=amount;else if(x.status==="pending")row.pending+=amount;row.total+=amount;rows.set(x.staff_user_id,row);}
+    for(const x of commissionLedger.filter(x=>x.branch_id===branchId&&(!reportRange.start||new Date(x.created_at)>=reportRange.start)&&(!reportRange.end||new Date(x.created_at)<=reportRange.end))){const row=rows.get(x.staff_user_id)||{user_id:x.staff_user_id,pending:0,paid:0,total:0};const amount=Number(x.commission_amount)||0;if(x.status==="paid")row.paid+=amount;else if(x.status==="pending")row.pending+=amount;row.total+=amount;rows.set(x.staff_user_id,row);}
     return [...rows.values()].sort((a,b)=>b.total-a.total);
-  },[commissionLedger,branchId]);
+  },[commissionLedger,branchId,reportRange]);
   const reportDaily = useMemo(()=>{
-    const days=reportPeriod==="all"?30:Number(reportPeriod);
     const map=new Map();
     for(const sale of reportSales){
       const key=new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Jakarta"}).format(new Date(sale.created_at));
       map.set(key,(map.get(key)||0)+Number(sale.total||0));
     }
+    const end=reportRange.end||new Date();
+    const start=reportRange.start;
+    const span=start?Math.ceil((end-start)/86400000)+1:30;
+    const days=Math.max(1,Math.min(90,span));
+    const chartStart=start&&span<=90?start:new Date(end.getTime()-(days-1)*86400000);
     const rows=[];
-    for(let offset=days-1;offset>=0;offset--){
-      const d=new Date(Date.now()-offset*86400000);
+    for(let offset=0;offset<days;offset++){
+      const d=new Date(chartStart.getTime()+offset*86400000);
       const key=new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Jakarta"}).format(d);
       rows.push({key,label:new Intl.DateTimeFormat("id-ID",{day:"2-digit",month:"short",timeZone:"Asia/Jakarta"}).format(d),revenue:map.get(key)||0});
     }
     return rows;
-  },[reportSales,reportPeriod]);
+  },[reportSales,reportRange]);
   const reportPaymentMethods = useMemo(()=>{
     const map=new Map();
     for(const sale of reportSales)for(const payment of sale.sale_payments||[]){
