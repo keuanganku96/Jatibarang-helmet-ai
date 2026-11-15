@@ -74,3 +74,11 @@ td small{display:block;color:#8994a5;font-size:9px;margin-top:5px;white-space:no
 .breakdown-track span{height:100%;display:block;background:#159565;border-radius:99px}
 .report-search{max-width:260px;min-width:170px}
 @media(max-width:760px){.product-photo-field{align-items:flex-start}.chart-column{width:58px}.report-search{max-width:none;width:100%}.panel-head{flex-wrap:wrap}}
+
+
+.report-filter-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;padding:14px;background:#f8fafc;border:1px solid #e8edf3;border-radius:10px;margin:14px 0}
+.report-filter-row label,.report-date{display:grid;gap:6px;font-size:10px;font-weight:700;color:#68758a}
+.report-date{min-width:130px}
+.report-date input{min-width:0}
+.report-filter-row select{width:100%}
+@media(max-width:760px){.report-filter-row{grid-template-columns:1fr}.report-date{min-width:110px}}
