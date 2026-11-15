@@ -195,28 +195,7 @@ export default function App() {
 
   useEffect(()=>{ if(session) loadData(); },[session,loadData]);
 
-  useEffect(()=>{
-    if(!session?.user?.id || !business?.id || !branchId || !["owner","admin","manager"].includes(membership?.role)){
-      setProfitLoss(null);
-      return;
-    }
-    let alive=true;
-    const endAt=reportRange.end||new Date();
-    const startAt=reportRange.start?reportRange.start.toISOString():null;
-    setProfitLossLoading(true);
-    supabase.rpc("get_profit_loss_summary",{
-      p_business_id:business.id,
-      p_branch_id:branchId,
-      p_start_at:startAt,
-      p_end_at:endAt.toISOString()
-    }).then(({data,error})=>{
-      if(!alive)return;
-      if(error){setProfitLoss(null);setError("Laporan laba rugi gagal dimuat: "+error.message);}
-      else setProfitLoss(Array.isArray(data)?(data[0]||null):data);
-      setProfitLossLoading(false);
-    });
-    return ()=>{alive=false;};
-  },[session?.user?.id,business?.id,branchId,reportRange,membership?.role]);
+
 
 
   useEffect(()=>{if(!notice)return;const timer=setTimeout(()=>setNotice(""),3500);return()=>clearTimeout(timer);},[notice]);
@@ -370,6 +349,29 @@ export default function App() {
     else if(reportPeriod!=="all"){start=new Date(now.getTime()-(Number(reportPeriod)||30)*86400000);end=now;}
     return {start,end};
   },[reportPeriod,reportStartDate,reportEndDate]);
+
+  useEffect(()=>{
+    if(!session?.user?.id || !business?.id || !branchId || !["owner","admin","manager"].includes(membership?.role)){
+      setProfitLoss(null);
+      return;
+    }
+    let alive=true;
+    const endAt=reportRange.end||new Date();
+    const startAt=reportRange.start?reportRange.start.toISOString():null;
+    setProfitLossLoading(true);
+    supabase.rpc("get_profit_loss_summary",{
+      p_business_id:business.id,
+      p_branch_id:branchId,
+      p_start_at:startAt,
+      p_end_at:endAt.toISOString()
+    }).then(({data,error})=>{
+      if(!alive)return;
+      if(error){setProfitLoss(null);setError("Laporan laba rugi gagal dimuat: "+error.message);}
+      else setProfitLoss(Array.isArray(data)?(data[0]||null):data);
+      setProfitLossLoading(false);
+    });
+    return ()=>{alive=false;};
+  },[session?.user?.id,business?.id,branchId,reportRange,membership?.role]);
   const reportTransactions = useMemo(()=>sales.filter(s=>{
     const date=new Date(s.created_at);
     if(reportRange.start&&date<reportRange.start)return false;
