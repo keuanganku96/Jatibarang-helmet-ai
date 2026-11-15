@@ -4,7 +4,7 @@ import JsBarcode from "jsbarcode";
 
 const money = value => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(Number(value) || 0);
 const BUSINESS_ID = "8552ecbe-a62e-41b9-b274-b855f6b5e37b";
-const NAV = [["Dashboard","▦"],["Kasir","▣"],["Retur Penjualan","↩"],["Produk & Stok","▤"],["Stok Opname","▧"],["Transfer Stok","⇄"],["Pembelian","⇧"],["Pemasok","♧"],["Pelanggan","♙"],["Garansi","✓"],["Laporan","▥"],["Keuangan","Rp"],["Karyawan & Shift","♙"],["Pengaturan","⚙"]];
+const NAV = [["Dashboard","▦"],["Kasir","▣"],["Piutang Pelanggan","Rp"],["Retur Penjualan","↩"],["Produk & Stok","▤"],["Stok Opname","▧"],["Transfer Stok","⇄"],["Pembelian","⇧"],["Pemasok","♧"],["Pelanggan","♙"],["Garansi","✓"],["Laporan","▥"],["Keuangan","Rp"],["Karyawan & Shift","♙"],["Pengaturan","⚙"]];
 
 function getStaffDeviceId(){let id=localStorage.getItem("smartpos_device_id");if(!id){id=crypto.randomUUID();localStorage.setItem("smartpos_device_id",id);}return id;}
 function Login({onLogin}){
@@ -104,6 +104,11 @@ export default function App() {
   const [continuousScan,setContinuousScan] = useState(true);
   const [customerScan,setCustomerScan] = useState("");
   const [payment,setPayment] = useState("Tunai");
+  const [paymentLines,setPaymentLines] = useState([{payment_method:"Tunai",amount:"",payment_reference:""}]);
+  const [paymentDueDate,setPaymentDueDate] = useState("");
+  const [paymentNotes,setPaymentNotes] = useState("");
+  const [selectedReceivableId,setSelectedReceivableId] = useState("");
+  const [receivablePaymentDraft,setReceivablePaymentDraft] = useState({payment_method:"Tunai",amount:"",payment_reference:""});
   const [customerId,setCustomerId] = useState("");
   const [showProductForm,setShowProductForm] = useState(false);
   const [editingProductId,setEditingProductId] = useState("");
@@ -145,7 +150,7 @@ export default function App() {
         supabase.from("inventory").select("product_id,warehouse_id,quantity").eq("business_id",businessId),
         supabase.from("categories").select("id,name").eq("business_id",businessId).order("name"),
         supabase.from("customers").select("id,name,customer_code,phone,email,address,total_transactions,total_spend,membership_tier,created_at").eq("business_id",businessId).order("name"),
-        (branchId ? supabase.from("sales").select("id,invoice_no,status,total,created_at,customer_id,cashier_id,sale_items(id,product_id,product_name,quantity,unit_price,unit_cost,discount,line_total),sale_payments(payment_method,amount,payment_status)").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("sales").select("id,invoice_no,status,total,created_at,customer_id,cashier_id,sale_items(id,product_id,product_name,quantity,unit_price,unit_cost,discount,line_total)").eq("business_id",businessId )).order("created_at",{ascending:false}).limit(1000),
+        (branchId ? supabase.from("sales").select("id,invoice_no,status,total,due_date,receivable_notes,created_at,customer_id,cashier_id,sale_items(id,product_id,product_name,quantity,unit_price,unit_cost,discount,line_total),sale_payments(id,payment_method,amount,payment_reference,payment_status,created_at)").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("sales").select("id,invoice_no,status,total,due_date,receivable_notes,created_at,customer_id,cashier_id,sale_items(id,product_id,product_name,quantity,unit_price,unit_cost,discount,line_total),sale_payments(id,payment_method,amount,payment_reference,payment_status,created_at)").eq("business_id",businessId )).order("created_at",{ascending:false}).limit(1000),
         supabase.from("suppliers").select("id,name,phone,email,address").eq("business_id",businessId).order("name"),
         (branchId ? supabase.from("purchase_orders").select("id,purchase_no,status,total,amount_paid,payable_tracking_enabled,due_date,supplier_invoice_no,created_at,supplier_id,suppliers(name),purchase_items(quantity,unit_cost,line_total)").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("purchase_orders").select("id,purchase_no,status,total,amount_paid,payable_tracking_enabled,due_date,supplier_invoice_no,created_at,supplier_id,suppliers(name),purchase_items(quantity)").eq("business_id",businessId)).order("created_at",{ascending:false}).limit(100),
         (branchId ? supabase.from("supplier_payments").select("id,purchase_id,supplier_id,amount,payment_method,reference_no,notes,created_at").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("supplier_payments").select("id,purchase_id,supplier_id,amount,payment_method,reference_no,notes,created_at").eq("business_id",businessId)).order("created_at",{ascending:false}).limit(300),
@@ -397,11 +402,17 @@ export default function App() {
     if(reportCategoryFilter!=="all"&&!(s.sale_items||[]).some(i=>products.find(p=>p.id===i.product_id)?.category===reportCategoryFilter))return false;
     return true;
   }),[sales,reportRange,reportStaffFilter,reportPaymentFilter,reportCategoryFilter,products]);
-  const reportSales = useMemo(()=>reportTransactions.filter(s=>s.status==="paid"),[reportTransactions]);
+  const reportSales = useMemo(()=>reportTransactions.filter(s=>["paid","partial","refunded"].includes(s.status)),[reportTransactions]);
   const filteredReportTransactions = useMemo(()=>{
     const q=reportSearch.trim().toLowerCase();
     return q?reportTransactions.filter(s=>(s.invoice_no||"").toLowerCase().includes(q)||(s.status||"").toLowerCase().includes(q)):reportTransactions;
   },[reportTransactions,reportSearch]);
+  const receivableRows = useMemo(()=>sales.filter(s=>s.status==="partial").map(s=>{const paid=(s.sale_payments||[]).filter(p=>p.payment_status==="completed").reduce((sum,p)=>sum+Number(p.amount||0),0);return {...s,paidAmount:paid,balanceDue:Math.max(0,Number(s.total||0)-paid)};}).filter(s=>s.balanceDue>0).sort((a,b)=>new Date(a.due_date||"9999-12-31")-new Date(b.due_date||"9999-12-31")),[sales]);
+  const totalReceivables = receivableRows.reduce((sum,s)=>sum+s.balanceDue,0);
+  const overdueReceivables = receivableRows.filter(s=>s.due_date&&s.due_date<new Date().toLocaleDateString("en-CA",{timeZone:"Asia/Jakarta"}));
+  const paymentDraftTotal = paymentLines.reduce((sum,line)=>sum+(Number(line.amount)||0),0);
+  const projectedPaid = paymentLines.length===1&&!paymentLines[0].amount?cartTotal:paymentDraftTotal;
+  const projectedBalance = Math.max(0,cartTotal-projectedPaid);
   const reportPaymentOptions = useMemo(()=>[...new Set(sales.flatMap(s=>(s.sale_payments||[]).map(p=>p.payment_method).filter(Boolean)))].sort(),[sales]);
   const reportCategoryOptions = useMemo(()=>[...new Set(products.map(p=>p.category).filter(Boolean))].sort(),[products]);
   const reportPurchases = useMemo(()=>purchases.filter(p=>{const d=new Date(p.created_at);return (!reportRange.start||d>=reportRange.start)&&(!reportRange.end||d<=reportRange.end);}),[purchases,reportRange]);
@@ -496,15 +507,39 @@ export default function App() {
 
   async function checkout(){
     if(!cart.length||!warehouseId||!branchId)return;
+    const payments=paymentLines.map(line=>({...line,amount:line.amount===""&&paymentLines.length===1?cartTotal:Number(line.amount)||0})).filter(line=>line.amount>0);
+    const paid=payments.reduce((sum,line)=>sum+line.amount,0);
+    if(paid>cartTotal){setError("Total pembayaran tidak boleh melebihi total transaksi.");return;}
+    if(paid<cartTotal&&(!customerId||!paymentDueDate)){setError("Untuk uang muka/piutang, pilih pelanggan dan isi tanggal jatuh tempo.");return;}
+    if(paymentLines.length>1&&payments.length!==paymentLines.length){setError("Isi nominal setiap metode pembayaran split bill.");return;}
+    if(!payments.length&&cartTotal>0){setError("Masukkan minimal satu pembayaran atau uang muka.");return;}
     setBusy(true);setError("");
-    const {data,error:checkoutError}=await supabase.rpc("checkout_sale",{
+    const {data,error:checkoutError}=await supabase.rpc("checkout_sale_with_payments",{
       p_business_id:business.id,p_branch_id:branchId,p_warehouse_id:warehouseId,
       p_customer_id:customerId||null,p_items:cart.map(item=>({product_id:item.id,quantity:item.qty,discount_amount:Number(item.discountAmount)||0})),
-      p_payment_method:payment
+      p_payments:payments,p_due_date:paid<cartTotal?paymentDueDate:null,p_receivable_notes:paymentNotes||null
     });
     if(checkoutError){setError(checkoutError.message);setBusy(false);return;}
-    setCart([]);setCustomerId("");setNotice("Transaksi "+(data?.[0]?.invoice_no||"") +" berhasil disimpan ke database.");
+    const result=data?.[0];
+    setCart([]);setCustomerId("");setPaymentLines([{payment_method:"Tunai",amount:"",payment_reference:""}]);setPaymentDueDate("");setPaymentNotes("");
+    setNotice("Invoice "+(result?.invoice_no||"")+" tersimpan. Dibayar "+money(result?.paid_amount||0)+", sisa piutang "+money(result?.balance_due||0)+".");
     await loadData();
+  }
+
+  async function recordReceivablePayment(e){
+    e.preventDefault();
+    const sale=receivableRows.find(s=>s.id===selectedReceivableId);
+    if(!sale){setError("Pilih invoice piutang terlebih dahulu.");return;}
+    const amount=Number(receivablePaymentDraft.amount);
+    if(!amount||amount<=0){setError("Masukkan nominal pembayaran yang valid.");return;}
+    if(amount>sale.balanceDue){setError("Pembayaran melebihi sisa piutang.");return;}
+    setBusy(true);setError("");
+    const {data,error:e2}=await supabase.rpc("record_sale_payment",{p_sale_id:sale.id,p_payment_method:receivablePaymentDraft.payment_method,p_amount:amount,p_payment_reference:receivablePaymentDraft.payment_reference||null});
+    setBusy(false);
+    if(e2){setError(e2.message);return;}
+    const result=data?.[0];
+    setNotice("Pembayaran invoice "+sale.invoice_no+" berhasil. Sisa piutang "+money(result?.balance_due||0)+".");
+    setReceivablePaymentDraft({payment_method:"Tunai",amount:"",payment_reference:""});setSelectedReceivableId("");await loadData();
   }
 
   async function processSaleReturn(e){
@@ -747,9 +782,24 @@ export default function App() {
             <section className="panel cart-panel"><div className="panel-head"><div><h3>Keranjang</h3><p>{cart.reduce((a,c)=>a+c.qty,0)} item dipilih</p></div><button className="text-btn" onClick={()=>setCart([])}>Kosongkan</button></div>
               {cart.length===0?<div className="empty">Keranjang masih kosong.</div>:cart.map(item=><div className="cart-row" key={item.id}><div><b>{item.name}</b><small>{money(item.price)} / item · Diskon {money(item.discountAmount||0)}</small><label className="discount-edit">Diskon total (Rp)<input type="number" min="0" max={item.price*item.qty} value={item.discountAmount||0} onChange={e=>setCart(old=>old.map(x=>x.id===item.id?{...x,discountAmount:Math.min(x.price*x.qty,Math.max(0,Number(e.target.value)||0))}:x))}/></label></div><div className="qty"><button onClick={()=>setCart(old=>old.map(x=>x.id===item.id?{...x,qty:x.qty-1,discountAmount:x.qty>1?Math.min(x.discountAmount||0,x.price*(x.qty-1)):0}:x).filter(x=>x.qty>0))}>−</button>{item.qty}<button onClick={()=>addCart(products.find(p=>p.id===item.id))}>＋</button></div></div>)}
               <div className="checkout-fields"><label>Scan ID pelanggan<input value={customerScan} onChange={e=>setCustomerScan(e.target.value)} onKeyDown={scanCustomer} placeholder="Scan barcode ID member lalu Enter"/></label><label>Pelanggan<select value={customerId} onChange={e=>setCustomerId(e.target.value)}><option value="">Pelanggan umum</option>{customers.map(c=><option key={c.id} value={c.id}>{c.name} · {c.customer_code||c.id.slice(0,8)}</option>)}</select></label>
-                <label>Metode pembayaran<select value={payment} onChange={e=>setPayment(e.target.value)}><option>Tunai</option><option>Transfer bank</option><option>QRIS</option><option>Debit</option></select></label></div>
-              <div className="total-line"><span>Subtotal</span><strong>{money(cartSubtotal)}</strong></div><div className="total-line"><span>Diskon produk</span><strong>− {money(cartDiscount)}</strong></div>{membershipDiscount>0&&<div className="total-line"><span>Diskon member {selectedTier?.tier_name||"Member"}</span><strong>− {money(membershipDiscount)}</strong></div>}<div className="total-line"><span>Total bayar</span><strong>{money(cartTotal)}</strong></div><button className="primary full" disabled={!cart.length||busy||!warehouseId} onClick={checkout}>Selesaikan transaksi</button>
+                <div className="payment-builder"><div className="panel-head"><div><h4>Metode pembayaran</h4><p>Satu metode, split bill, uang muka, atau piutang.</p></div><button type="button" className="text-btn" onClick={()=>setPaymentLines(lines=>[...lines,{payment_method:"Transfer bank",amount:"",payment_reference:""}])}>＋ Tambah metode</button></div>
+                  {paymentLines.map((line,index)=><div className="form-grid payment-line" key={index}><label>Metode<select value={line.payment_method} onChange={e=>setPaymentLines(lines=>lines.map((v,i)=>i===index?{...v,payment_method:e.target.value}:v))}><option>Tunai</option><option>Transfer bank</option><option>QRIS</option><option>Debit</option></select></label><label>Nominal diterima (Rp)<input type="number" min="0" step="1" placeholder={paymentLines.length===1?"Kosongkan untuk bayar penuh":"Nominal metode ini"} value={line.amount} onChange={e=>setPaymentLines(lines=>lines.map((v,i)=>i===index?{...v,amount:e.target.value}:v))}/></label><label>Referensi (opsional)<input value={line.payment_reference} onChange={e=>setPaymentLines(lines=>lines.map((v,i)=>i===index?{...v,payment_reference:e.target.value}:v))}/></label>{paymentLines.length>1&&<button type="button" className="text-btn" onClick={()=>setPaymentLines(lines=>lines.filter((_,i)=>i!==index))}>Hapus metode</button>}</div>)}
+                </div></div>
+              <div className="total-line"><span>Subtotal</span><strong>{money(cartSubtotal)}</strong></div><div className="total-line"><span>Diskon produk</span><strong>− {money(cartDiscount)}</strong></div>{membershipDiscount>0&&<div className="total-line"><span>Diskon member {selectedTier?.tier_name||"Member"}</span><strong>− {money(membershipDiscount)}</strong></div>}<div className="total-line"><span>Total transaksi</span><strong>{money(cartTotal)}</strong></div><div className="total-line"><span>Total diterima</span><strong>{money(projectedPaid)}</strong></div><div className="total-line"><span>Sisa tagihan</span><strong>{money(projectedBalance)}</strong></div>
+              {projectedBalance>0&&<div className="form-grid"><label>Tanggal jatuh tempo<input type="date" min={new Date().toLocaleDateString("en-CA",{timeZone:"Asia/Jakarta"})} value={paymentDueDate} onChange={e=>setPaymentDueDate(e.target.value)} required/></label><label>Catatan piutang<input value={paymentNotes} onChange={e=>setPaymentNotes(e.target.value)} placeholder="Contoh: pelunasan saat pengambilan"/></label><small>Piutang hanya dapat dibuat jika pelanggan sudah dipilih di atas.</small></div>}
+              <button className="primary full" disabled={!cart.length||busy||!warehouseId} onClick={checkout}>Simpan transaksi & pembayaran</button>
             </section></div></>}
+        {page==="Piutang Pelanggan"&&<><div className="welcome"><div><span className="eyebrow">CUSTOMER RECEIVABLES</span><h1>Piutang Pelanggan</h1><p>Pantau uang muka, sisa tagihan, tanggal jatuh tempo, dan catat pelunasan pelanggan.</p></div><button className="secondary" onClick={loadData}>↻ Segarkan</button></div>
+          <div className="stats-grid"><div className="stat-card"><span>Total piutang aktif</span><strong>{money(totalReceivables)}</strong></div><div className="stat-card"><span>Invoice belum lunas</span><strong>{receivableRows.length}</strong></div><div className="stat-card"><span>Sudah jatuh tempo</span><strong>{overdueReceivables.length}</strong></div></div>
+          <section className="panel"><div className="panel-head"><div><h3>Daftar tagihan pelanggan</h3><p>Nilai terbayar dan saldo dihitung dari seluruh pembayaran yang tervalidasi.</p></div></div>
+            <div className="table-wrap"><table><thead><tr><th>INVOICE</th><th>PELANGGAN</th><th>TANGGAL</th><th>JATUH TEMPO</th><th>TOTAL</th><th>DIBAYAR</th><th>SISA TAGIHAN</th><th>STATUS</th></tr></thead><tbody>{receivableRows.map(s=>{const customer=customers.find(c=>c.id===s.customer_id);const overdue=s.due_date&&s.due_date<new Date().toLocaleDateString("en-CA",{timeZone:"Asia/Jakarta"});return <tr key={s.id}><td><b>{s.invoice_no}</b></td><td>{customer?.name||"Pelanggan"}</td><td>{new Date(s.created_at).toLocaleDateString("id-ID")}</td><td><span className={overdue?"badge red":"badge yellow"}>{s.due_date?new Date(s.due_date+"T00:00:00").toLocaleDateString("id-ID"):"Belum diatur"}</span></td><td>{money(s.total)}</td><td>{money(s.paidAmount)}</td><td className="amount">{money(s.balanceDue)}</td><td><button className="text-btn" onClick={()=>setSelectedReceivableId(s.id)}>Catat pembayaran</button></td></tr>;})}</tbody></table></div>
+            {receivableRows.length===0&&<div className="empty">Tidak ada piutang aktif. Semua invoice sudah lunas.</div>}
+          </section>
+          {selectedReceivableId&&(()=>{const sale=receivableRows.find(s=>s.id===selectedReceivableId);if(!sale)return null;return <section className="panel"><div className="panel-head"><div><h3>Terima pembayaran — {sale.invoice_no}</h3><p>Sisa tagihan: <b>{money(sale.balanceDue)}</b></p></div><button className="text-btn" onClick={()=>setSelectedReceivableId("")}>Tutup</button></div>
+            <div className="table-wrap"><table><thead><tr><th>TANGGAL</th><th>METODE</th><th>REFERENSI</th><th>NOMINAL</th></tr></thead><tbody>{(sale.sale_payments||[]).filter(p=>p.payment_status==="completed").map(p=><tr key={p.id}><td>{new Date(p.created_at).toLocaleString("id-ID")}</td><td>{p.payment_method}</td><td>{p.payment_reference||"—"}</td><td>{money(p.amount)}</td></tr>)}</tbody></table></div>
+            <form className="form-grid" onSubmit={recordReceivablePayment}><label>Metode pembayaran<select value={receivablePaymentDraft.payment_method} onChange={e=>setReceivablePaymentDraft(v=>({...v,payment_method:e.target.value}))}><option>Tunai</option><option>Transfer bank</option><option>QRIS</option><option>Debit</option></select></label><label>Nominal diterima (Rp)<input type="number" min="1" max={sale.balanceDue} value={receivablePaymentDraft.amount} onChange={e=>setReceivablePaymentDraft(v=>({...v,amount:e.target.value}))} required/></label><label>Nomor referensi (opsional)<input value={receivablePaymentDraft.payment_reference} onChange={e=>setReceivablePaymentDraft(v=>({...v,payment_reference:e.target.value}))}/></label><div className="form-actions"><button className="primary" disabled={busy}>Simpan pembayaran</button></div></form>
+          </section>;})()}
+        </>}
         {page==="Retur Penjualan"&&<><div className="welcome"><div><span className="eyebrow">REFUND & INVENTORY CONTROL</span><h1>Retur Penjualan</h1><p>Proses pengembalian sebagian atau seluruh barang dari invoice. Setiap retur tercatat di kas, stok, dan audit.</p></div><button className="secondary" onClick={loadData}>↻ Segarkan</button></div>
           {["owner","admin","manager"].includes(membership?.role)?<section className="panel"><div className="panel-head"><div><h3>Buat retur dari invoice</h3><p>Jumlah retur dibatasi oleh sisa barang yang belum pernah dikembalikan.</p></div></div>
             <label>Cari nomor invoice<input value={returnSearch} onChange={e=>setReturnSearch(e.target.value)} placeholder="Ketik nomor invoice"/></label>
