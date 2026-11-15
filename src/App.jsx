@@ -662,8 +662,8 @@ export default function App() {
             <label>Masa garansi (bulan)<input type="number" min="0" max="120" value={productForm.warranty_months} onChange={e=>setProductForm({...productForm,warranty_months:e.target.value})}/></label>
             <label>Perlindungan (%)<input type="number" min="0" max="100" step="0.5" value={productForm.warranty_coverage_percent} onChange={e=>setProductForm({...productForm,warranty_coverage_percent:e.target.value})}/></label>
             <label>Batas maksimal perlindungan (Rp)<input type="number" min="0" value={productForm.warranty_max_amount} onChange={e=>setProductForm({...productForm,warranty_max_amount:e.target.value})} placeholder="Kosong = tanpa batas"/></label>
-            <label>Minimal nilai klaim (Rp)<input type="number" min="0" value={productForm.warranty_min_claim} onChange={e=>setProductForm({...productForm,warranty_min_claim,e.target.value})}/></label>
-            <label>Maksimal jumlah klaim<input type="number" min="1" max="20" value={productForm.warranty_max_claims} onChange={e=>setProductForm({...productForm,warranty_max_claims,e.target.value})}/></label>
+            <label>Minimal nilai klaim (Rp)<input type="number" min="0" value={productForm.warranty_min_claim} onChange={e=>setProductForm({...productForm,warranty_min_claim:e.target.value})}/></label>
+            <label>Maksimal jumlah klaim<input type="number" min="1" max="20" value={productForm.warranty_max_claims} onChange={e=>setProductForm({...productForm,warranty_max_claims:e.target.value})}/></label>
             <label className="span-2">Ketentuan garansi<textarea rows="2" maxLength="2000" value={productForm.warranty_terms} onChange={e=>setProductForm({...productForm,warranty_terms:e.target.value})} placeholder="Syarat dan pengecualian garansi"/></label>
             <div className="form-actions"><button className="primary" disabled={busy||!warehouseId}>{busy?"Menyimpan...":editingProductId?"Simpan perubahan":"Simpan produk"}</button><button type="button" className="secondary" onClick={resetProductForm}>Batal</button></div>
           </form>}}
