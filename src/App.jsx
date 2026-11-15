@@ -106,6 +106,7 @@ export default function App() {
   const [payment,setPayment] = useState("Tunai");
   const [paymentLines,setPaymentLines] = useState([{payment_method:"Tunai",amount:"",payment_reference:""}]);
   const [paymentDueDate,setPaymentDueDate] = useState("");
+  const [fullCredit,setFullCredit] = useState(false);
   const [paymentNotes,setPaymentNotes] = useState("");
   const [selectedReceivableId,setSelectedReceivableId] = useState("");
   const [receivablePaymentDraft,setReceivablePaymentDraft] = useState({payment_method:"Tunai",amount:"",payment_reference:""});
@@ -411,7 +412,7 @@ export default function App() {
   const totalReceivables = receivableRows.reduce((sum,s)=>sum+s.balanceDue,0);
   const overdueReceivables = receivableRows.filter(s=>s.due_date&&s.due_date<new Date().toLocaleDateString("en-CA",{timeZone:"Asia/Jakarta"}));
   const paymentDraftTotal = paymentLines.reduce((sum,line)=>sum+(Number(line.amount)||0),0);
-  const projectedPaid = paymentLines.length===1&&!paymentLines[0].amount?cartTotal:paymentDraftTotal;
+  const projectedPaid = fullCredit?0:(paymentLines.length===1&&!paymentLines[0].amount?cartTotal:paymentDraftTotal);
   const projectedBalance = Math.max(0,cartTotal-projectedPaid);
   const reportPaymentOptions = useMemo(()=>[...new Set(sales.flatMap(s=>(s.sale_payments||[]).map(p=>p.payment_method).filter(Boolean)))].sort(),[sales]);
   const reportCategoryOptions = useMemo(()=>[...new Set(products.map(p=>p.category).filter(Boolean))].sort(),[products]);
@@ -507,12 +508,12 @@ export default function App() {
 
   async function checkout(){
     if(!cart.length||!warehouseId||!branchId)return;
-    const payments=paymentLines.map(line=>({...line,amount:line.amount===""&&paymentLines.length===1?cartTotal:Number(line.amount)||0})).filter(line=>line.amount>0);
+    const payments=fullCredit?[]:paymentLines.map(line=>({...line,amount:line.amount===""&&paymentLines.length===1?cartTotal:Number(line.amount)||0})).filter(line=>line.amount>0);
     const paid=payments.reduce((sum,line)=>sum+line.amount,0);
     if(paid>cartTotal){setError("Total pembayaran tidak boleh melebihi total transaksi.");return;}
     if(paid<cartTotal&&(!customerId||!paymentDueDate)){setError("Untuk uang muka/piutang, pilih pelanggan dan isi tanggal jatuh tempo.");return;}
     if(paymentLines.length>1&&payments.length!==paymentLines.length){setError("Isi nominal setiap metode pembayaran split bill.");return;}
-    if(!payments.length&&cartTotal>0){setError("Masukkan minimal satu pembayaran atau uang muka.");return;}
+    if(!payments.length&&cartTotal>0&&!fullCredit){setError("Masukkan minimal satu pembayaran atau pilih opsi seluruhnya piutang.");return;}
     setBusy(true);setError("");
     const {data,error:checkoutError}=await supabase.rpc("checkout_sale_with_payments",{
       p_business_id:business.id,p_branch_id:branchId,p_warehouse_id:warehouseId,
@@ -521,7 +522,7 @@ export default function App() {
     });
     if(checkoutError){setError(checkoutError.message);setBusy(false);return;}
     const result=data?.[0];
-    setCart([]);setCustomerId("");setPaymentLines([{payment_method:"Tunai",amount:"",payment_reference:""}]);setPaymentDueDate("");setPaymentNotes("");
+    setCart([]);setCustomerId("");setPaymentLines([{payment_method:"Tunai",amount:"",payment_reference:""}]);setPaymentDueDate("");setPaymentNotes("");setFullCredit(false);
     setNotice("Invoice "+(result?.invoice_no||"")+" tersimpan. Dibayar "+money(result?.paid_amount||0)+", sisa piutang "+money(result?.balance_due||0)+".");
     await loadData();
   }
@@ -782,7 +783,8 @@ export default function App() {
             <section className="panel cart-panel"><div className="panel-head"><div><h3>Keranjang</h3><p>{cart.reduce((a,c)=>a+c.qty,0)} item dipilih</p></div><button className="text-btn" onClick={()=>setCart([])}>Kosongkan</button></div>
               {cart.length===0?<div className="empty">Keranjang masih kosong.</div>:cart.map(item=><div className="cart-row" key={item.id}><div><b>{item.name}</b><small>{money(item.price)} / item · Diskon {money(item.discountAmount||0)}</small><label className="discount-edit">Diskon total (Rp)<input type="number" min="0" max={item.price*item.qty} value={item.discountAmount||0} onChange={e=>setCart(old=>old.map(x=>x.id===item.id?{...x,discountAmount:Math.min(x.price*x.qty,Math.max(0,Number(e.target.value)||0))}:x))}/></label></div><div className="qty"><button onClick={()=>setCart(old=>old.map(x=>x.id===item.id?{...x,qty:x.qty-1,discountAmount:x.qty>1?Math.min(x.discountAmount||0,x.price*(x.qty-1)):0}:x).filter(x=>x.qty>0))}>−</button>{item.qty}<button onClick={()=>addCart(products.find(p=>p.id===item.id))}>＋</button></div></div>)}
               <div className="checkout-fields"><label>Scan ID pelanggan<input value={customerScan} onChange={e=>setCustomerScan(e.target.value)} onKeyDown={scanCustomer} placeholder="Scan barcode ID member lalu Enter"/></label><label>Pelanggan<select value={customerId} onChange={e=>setCustomerId(e.target.value)}><option value="">Pelanggan umum</option>{customers.map(c=><option key={c.id} value={c.id}>{c.name} · {c.customer_code||c.id.slice(0,8)}</option>)}</select></label>
-                <div className="payment-builder"><div className="panel-head"><div><h4>Metode pembayaran</h4><p>Satu metode, split bill, uang muka, atau piutang.</p></div><button type="button" className="text-btn" onClick={()=>setPaymentLines(lines=>[...lines,{payment_method:"Transfer bank",amount:"",payment_reference:""}])}>＋ Tambah metode</button></div>
+                <label className="check-label"><input type="checkbox" checked={fullCredit} onChange={e=>setFullCredit(e.target.checked)}/> Seluruh transaksi menjadi piutang (tanpa uang muka)</label>
+                <div className="payment-builder" style={{opacity:fullCredit?0.45:1,pointerEvents:fullCredit?"none":"auto"}}><div className="panel-head"><div><h4>Metode pembayaran</h4><p>Satu metode, split bill, uang muka, atau piutang.</p></div><button type="button" className="text-btn" onClick={()=>setPaymentLines(lines=>[...lines,{payment_method:"Transfer bank",amount:"",payment_reference:""}])}>＋ Tambah metode</button></div>
                   {paymentLines.map((line,index)=><div className="form-grid payment-line" key={index}><label>Metode<select value={line.payment_method} onChange={e=>setPaymentLines(lines=>lines.map((v,i)=>i===index?{...v,payment_method:e.target.value}:v))}><option>Tunai</option><option>Transfer bank</option><option>QRIS</option><option>Debit</option></select></label><label>Nominal diterima (Rp)<input type="number" min="0" step="1" placeholder={paymentLines.length===1?"Kosongkan untuk bayar penuh":"Nominal metode ini"} value={line.amount} onChange={e=>setPaymentLines(lines=>lines.map((v,i)=>i===index?{...v,amount:e.target.value}:v))}/></label><label>Referensi (opsional)<input value={line.payment_reference} onChange={e=>setPaymentLines(lines=>lines.map((v,i)=>i===index?{...v,payment_reference:e.target.value}:v))}/></label>{paymentLines.length>1&&<button type="button" className="text-btn" onClick={()=>setPaymentLines(lines=>lines.filter((_,i)=>i!==index))}>Hapus metode</button>}</div>)}
                 </div></div>
               <div className="total-line"><span>Subtotal</span><strong>{money(cartSubtotal)}</strong></div><div className="total-line"><span>Diskon produk</span><strong>− {money(cartDiscount)}</strong></div>{membershipDiscount>0&&<div className="total-line"><span>Diskon member {selectedTier?.tier_name||"Member"}</span><strong>− {money(membershipDiscount)}</strong></div>}<div className="total-line"><span>Total transaksi</span><strong>{money(cartTotal)}</strong></div><div className="total-line"><span>Total diterima</span><strong>{money(projectedPaid)}</strong></div><div className="total-line"><span>Sisa tagihan</span><strong>{money(projectedBalance)}</strong></div>
