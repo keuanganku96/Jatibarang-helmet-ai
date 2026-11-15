@@ -100,6 +100,8 @@ export default function App() {
   const [shiftNote,setShiftNote] = useState("");
   const [expenseForm,setExpenseForm] = useState({category:"Operasional",description:"",amount:""});
   const [cart,setCart] = useState([]);
+  const [receiptData,setReceiptData] = useState(null);
+  const [receiptWidth,setReceiptWidth] = useState("58");
   const [search,setSearch] = useState("");
   const [continuousScan,setContinuousScan] = useState(true);
   const [customerScan,setCustomerScan] = useState("");
@@ -555,9 +557,43 @@ export default function App() {
     });
     if(checkoutError){setError(checkoutError.message);setBusy(false);return;}
     const result=data?.[0];
+    setReceiptData({
+      invoiceNo:result?.invoice_no||"—",
+      createdAt:new Date().toISOString(),
+      businessName:business?.name||"JATIBARANG HELMET",
+      branchName:branches.find(b=>b.id===branchId)?.name||"Cabang utama",
+      cashier:session?.user?.email||"Kasir",
+      customerName:selectedCustomer?.name||"Pelanggan umum",
+      customerCode:selectedCustomer?.customer_code||"",
+      items:cart.map(item=>({name:item.name,sku:item.sku||"",qty:Number(item.qty)||0,price:Number(item.price)||0,discount:Number(item.discountAmount)||0})),
+      subtotal:cartSubtotal,discount:cartDiscount+membershipDiscount,total:cartTotal,
+      payments:payments.map(p=>({method:p.payment_method,amount:Number(p.amount)||0,reference:p.payment_reference||""})),
+      paid:result?.paid_amount??paid,balance:result?.balance_due??Math.max(0,cartTotal-paid),
+      status:(result?.balance_due??Math.max(0,cartTotal-paid))>0?"BELUM LUNAS":"LUNAS"
+    });
     setCart([]);setCustomerId("");setPaymentLines([{payment_method:"Tunai",amount:"",payment_reference:""}]);setPaymentDueDate("");setPaymentNotes("");setFullCredit(false);
     setNotice("Invoice "+(result?.invoice_no||"")+" tersimpan. Dibayar "+money(result?.paid_amount||0)+", sisa piutang "+money(result?.balance_due||0)+".");
     await loadData();
+  }
+
+  function printThermalReceipt(){
+    if(!receiptData)return;
+    const esc=value=>String(value??"").replace(/[&<>"\']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","\'":"&#39;"}[ch]));
+    const rows=receiptData.items.map(item=>{
+      const lineTotal=Math.max(0,item.price*item.qty-item.discount);
+      return '<div class="item"><div class="item-name">'+esc(item.name)+'</div><div class="item-meta">'+esc(item.qty)+' x '+esc(money(item.price))+'</div>'+(item.discount>0?'<div class="item-meta">Diskon: -'+esc(money(item.discount))+'</div>':'')+'<div class="item-total">'+esc(money(lineTotal))+'</div></div>';
+    }).join("");
+    const paymentRows=receiptData.payments.map(p=>'<div class="row"><span>'+esc(p.method)+'</span><b>'+esc(money(p.amount))+'</b></div>').join("");
+    const width=receiptWidth==="80"?"80mm":"58mm";
+    const html=['<!doctype html><html><head><meta charset="utf-8"><title>Struk '+esc(receiptData.invoiceNo)+'</title>',
+      '<style>@page{size:'+width+' auto;margin:2mm}*{box-sizing:border-box}html,body{width:'+(receiptWidth==="80"?"76":"54")+'mm;margin:0;padding:0;color:#000;background:#fff;font-family:Arial,sans-serif;font-size:10px}.receipt{width:100%;padding:0}.center{text-align:center}.brand{font-size:14px;font-weight:800;letter-spacing:.3px}.muted{font-size:9px}.line{border:0;border-top:1px dashed #000;margin:7px 0}.row{display:flex;justify-content:space-between;gap:6px;margin:3px 0}.item{margin:6px 0}.item-name{font-weight:700;overflow-wrap:anywhere}.item-meta{font-size:9px;margin-top:2px}.item-total{text-align:right;font-weight:700}.grand{font-size:13px;font-weight:800}.status{font-weight:800;text-align:center;margin:8px 0}.thanks{text-align:center;font-size:9px;margin-top:10px}@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}</style></head><body><main class="receipt">',
+      '<div class="center"><div class="brand">'+esc(receiptData.businessName)+'</div><div>'+esc(receiptData.branchName)+'</div><div class="muted">STRUK PEMBELIAN</div></div><hr class="line">',
+      '<div class="row"><span>No. Invoice</span><b>'+esc(receiptData.invoiceNo)+'</b></div><div class="row"><span>Tanggal</span><span>'+esc(new Date(receiptData.createdAt).toLocaleString("id-ID"))+'</span></div><div class="row"><span>Kasir</span><span>'+esc(receiptData.cashier)+'</span></div><div class="row"><span>Pelanggan</span><span>'+esc(receiptData.customerName)+'</span></div>'+(receiptData.customerCode?'<div class="row"><span>ID Member</span><span>'+esc(receiptData.customerCode)+'</span></div>':'')+'<hr class="line">',
+      rows,'<hr class="line"><div class="row"><span>Subtotal</span><span>'+esc(money(receiptData.subtotal))+'</span></div><div class="row"><span>Total diskon</span><span>- '+esc(money(receiptData.discount))+'</span></div><div class="row grand"><span>TOTAL</span><span>'+esc(money(receiptData.total))+'</span></div><hr class="line"><b>PEMBAYARAN</b>',
+      paymentRows,'<div class="row"><span>Total dibayar</span><b>'+esc(money(receiptData.paid))+'</b></div><div class="row"><span>Sisa tagihan</span><b>'+esc(money(receiptData.balance))+'</b></div><div class="status">'+esc(receiptData.status)+'</div><hr class="line"><div class="thanks">Terima kasih telah berbelanja<br>JATIBARANG HELMET</div></main><script>window.onload=function(){setTimeout(function(){window.print()},250)};<\/script></body></html>'].join("");
+    const w=window.open("","_blank","width=420,height=700");
+    if(!w){setError("Izinkan pop-up browser untuk mencetak struk.");return;}
+    w.document.open();w.document.write(html);w.document.close();
   }
 
   async function recordReceivablePayment(e){
@@ -991,6 +1027,11 @@ export default function App() {
           </form>)}
           {!["owner","admin"].includes(membership?.role)&&<p className="warning-note">Hanya Owner/Admin yang dapat mengubah aturan membership.</p>}
           </section></>}
+        {receiptData&&<div role="dialog" aria-modal="true" aria-label="Struk transaksi" style={{position:"fixed",inset:0,zIndex:1000,background:"rgba(8,20,35,.62)",display:"grid",placeItems:"center",padding:16}}>
+          <section className="panel" style={{width:"min(100%,460px)",maxHeight:"90vh",overflowY:"auto"}}><div className="panel-head"><div><span className="eyebrow">TRANSAKSI BERHASIL</span><h2>Struk siap dicetak</h2><p>Invoice {receiptData.invoiceNo} · {receiptData.status}</p></div><button className="text-btn" onClick={()=>setReceiptData(null)}>Tutup</button></div>
+            <div style={{background:"#f7f9fc",border:"1px dashed #9aa8b8",padding:14,borderRadius:10,fontFamily:"monospace",fontSize:12,color:"#172b43"}}><div style={{textAlign:"center",fontWeight:800,fontSize:15}}>{receiptData.businessName}</div><div style={{textAlign:"center"}}>{receiptData.branchName}</div><hr/><div>No: {receiptData.invoiceNo}</div><div>{new Date(receiptData.createdAt).toLocaleString("id-ID")}</div><div>Kasir: {receiptData.cashier}</div><div>Pelanggan: {receiptData.customerName}</div><hr/>{receiptData.items.map((item,i)=><div key={i} style={{marginBottom:8}}><b>{item.name}</b><div>{item.qty} x {money(item.price)} = {money(Math.max(0,item.qty*item.price-item.discount))}</div>{item.discount>0&&<small>Diskon: -{money(item.discount)}</small>}</div>)}<hr/><div>Subtotal: {money(receiptData.subtotal)}</div><div>Diskon: -{money(receiptData.discount)}</div><b style={{fontSize:14}}>TOTAL: {money(receiptData.total)}</b><hr/>{receiptData.payments.map((p,i)=><div key={i}>{p.method}: {money(p.amount)}</div>)}<div>Dibayar: {money(receiptData.paid)}</div><div>Sisa: {money(receiptData.balance)}</div><div style={{textAlign:"center",fontWeight:800,marginTop:8}}>{receiptData.status}</div><hr/><div style={{textAlign:"center"}}>Terima kasih telah berbelanja</div></div>
+            <label style={{marginTop:14}}>Ukuran kertas thermal<select value={receiptWidth} onChange={e=>setReceiptWidth(e.target.value)}><option value="58">58 mm</option><option value="80">80 mm</option></select></label><div className="form-actions" style={{display:"flex",gap:8,marginTop:12}}><button className="primary" onClick={printThermalReceipt}>Cetak struk</button><button className="secondary" onClick={()=>setReceiptData(null)}>Selesai</button></div><small>Di jendela cetak, pilih printer thermal dan ukuran kertas yang sama. Matikan header/footer browser jika tersedia.</small>
+          </section></div>}
         <footer>SMART POS JATIBARANG · Data tersimpan di Supabase Cloud</footer>
       </div>
     </main>
