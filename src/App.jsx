@@ -578,7 +578,7 @@ export default function App() {
 
   function printThermalReceipt(){
     if(!receiptData)return;
-    const esc=value=>String(value??"").replace(/[&<>"\']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","\'":"&#39;"}[ch]));
+    const esc=value=>String(value??"").replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
     const rows=receiptData.items.map(item=>{
       const lineTotal=Math.max(0,item.price*item.qty-item.discount);
       return '<div class="item"><div class="item-name">'+esc(item.name)+'</div><div class="item-meta">'+esc(item.qty)+' x '+esc(money(item.price))+'</div>'+(item.discount>0?'<div class="item-meta">Diskon: -'+esc(money(item.discount))+'</div>':'')+'<div class="item-total">'+esc(money(lineTotal))+'</div></div>';
