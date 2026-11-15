@@ -56,6 +56,7 @@ export default function App() {
   const [branchId,setBranchId] = useState("");
   const [warehouseId,setWarehouseId] = useState("");
   const [products,setProducts] = useState([]);
+  const [inventoryRows,setInventoryRows] = useState([]);
   const [customers,setCustomers] = useState([]);
   const [suppliers,setSuppliers] = useState([]);
   const [purchases,setPurchases] = useState([]);
@@ -64,6 +65,11 @@ export default function App() {
   const [sales,setSales] = useState([]);
   const [reportPeriod,setReportPeriod] = useState("30");
   const [reportSearch,setReportSearch] = useState("");
+  const [reportStaffFilter,setReportStaffFilter] = useState("all");
+  const [reportPaymentFilter,setReportPaymentFilter] = useState("all");
+  const [reportCategoryFilter,setReportCategoryFilter] = useState("all");
+  const [reportStartDate,setReportStartDate] = useState("");
+  const [reportEndDate,setReportEndDate] = useState("");
   const [profitLoss,setProfitLoss] = useState(null);
   const [profitLossLoading,setProfitLossLoading] = useState(false);
   const [cashEntries,setCashEntries] = useState([]);
@@ -129,10 +135,10 @@ export default function App() {
         supabase.from("products").select("id,business_id,category_id,sku,barcode,name,unit,cost_price,selling_price,min_stock,image_url,discount_type,discount_value,warranty_months,warranty_coverage_percent,warranty_max_amount,warranty_min_claim,warranty_max_claims,warranty_terms,is_active").eq("business_id",businessId).eq("is_active",true).order("name"),
         supabase.from("inventory").select("product_id,warehouse_id,quantity").eq("business_id",businessId),
         supabase.from("categories").select("id,name").eq("business_id",businessId).order("name"),
-        supabase.from("customers").select("id,name,customer_code,phone,email,address,total_transactions,total_spend,membership_tier").eq("business_id",businessId).order("name"),
+        supabase.from("customers").select("id,name,customer_code,phone,email,address,total_transactions,total_spend,membership_tier,created_at").eq("business_id",businessId).order("name"),
         (branchId ? supabase.from("sales").select("id,invoice_no,status,total,created_at,customer_id,cashier_id,sale_items(product_id,product_name,quantity,unit_price,unit_cost,discount,line_total),sale_payments(payment_method,amount,payment_status)").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("sales").select("id,invoice_no,status,total,created_at,customer_id,cashier_id,sale_items(product_id,product_name,quantity,unit_price,unit_cost,discount,line_total)").eq("business_id",businessId )).order("created_at",{ascending:false}).limit(1000),
         supabase.from("suppliers").select("id,name,phone,email,address").eq("business_id",businessId).order("name"),
-        (branchId ? supabase.from("purchase_orders").select("id,purchase_no,status,total,amount_paid,payable_tracking_enabled,due_date,supplier_invoice_no,created_at,supplier_id,suppliers(name),purchase_items(quantity)").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("purchase_orders").select("id,purchase_no,status,total,amount_paid,payable_tracking_enabled,due_date,supplier_invoice_no,created_at,supplier_id,suppliers(name),purchase_items(quantity)").eq("business_id",businessId)).order("created_at",{ascending:false}).limit(100),
+        (branchId ? supabase.from("purchase_orders").select("id,purchase_no,status,total,amount_paid,payable_tracking_enabled,due_date,supplier_invoice_no,created_at,supplier_id,suppliers(name),purchase_items(quantity,unit_cost,line_total)").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("purchase_orders").select("id,purchase_no,status,total,amount_paid,payable_tracking_enabled,due_date,supplier_invoice_no,created_at,supplier_id,suppliers(name),purchase_items(quantity)").eq("business_id",businessId)).order("created_at",{ascending:false}).limit(100),
         (branchId ? supabase.from("supplier_payments").select("id,purchase_id,supplier_id,amount,payment_method,reference_no,notes,created_at").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("supplier_payments").select("id,purchase_id,supplier_id,amount,payment_method,reference_no,notes,created_at").eq("business_id",businessId)).order("created_at",{ascending:false}).limit(300),
         (branchId ? supabase.from("cash_entries").select("id,entry_type,category,description,amount,created_at,reference_type").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("cash_entries").select("id,entry_type,category,description,amount,created_at,reference_type").eq("business_id",businessId)).order("created_at",{ascending:false}).limit(200),
         supabase.from("membership_tiers").select("id,business_id,tier_code,tier_name,min_transactions,min_spend,discount_percent,is_active").eq("business_id",businessId).order("tier_code"),
@@ -178,7 +184,7 @@ export default function App() {
           stockMap[row.product_id] = Number(row.quantity || 0);
         }
       }
-      setBusiness(bizRes.data); setMembership(member); setBranches(accessibleBranches); setWarehouses(warehouseRes.data);
+      setBusiness(bizRes.data); setMembership(member); setBranches(accessibleBranches); setWarehouses(warehouseRes.data); setInventoryRows(inventoryRes.data||[]);
       setBranchId(activeBranch?.id||""); setWarehouseId(activeWarehouse?.id||"");
       setProducts(productRes.data.map(p=>({...p,category:categoryMap[p.category_id]||"Umum",stock:stockMap[p.id]||0,price:Number(p.selling_price),cost:Number(p.cost_price),min:Number(p.min_stock),discountType:p.discount_type||"none",discountValue:Number(p.discount_value)||0})));
       setCustomers(customerRes.data); setSales(salesRes.data); setMembershipTiers(tiersRes.data||[]);
@@ -195,8 +201,8 @@ export default function App() {
       return;
     }
     let alive=true;
-    const endAt=new Date();
-    const startAt=reportPeriod==="all"?null:new Date(endAt.getTime()-Number(reportPeriod)*86400000).toISOString();
+    const endAt=reportRange.end||new Date();
+    const startAt=reportRange.start?reportRange.start.toISOString():null;
     setProfitLossLoading(true);
     supabase.rpc("get_profit_loss_summary",{
       p_business_id:business.id,
@@ -210,7 +216,7 @@ export default function App() {
       setProfitLossLoading(false);
     });
     return ()=>{alive=false;};
-  },[session?.user?.id,business?.id,branchId,reportPeriod,membership?.role]);
+  },[session?.user?.id,business?.id,branchId,reportRange,membership?.role]);
 
 
   useEffect(()=>{if(!notice)return;const timer=setTimeout(()=>setNotice(""),3500);return()=>clearTimeout(timer);},[notice]);
@@ -351,17 +357,51 @@ export default function App() {
   const todayKey = new Date().toLocaleDateString("en-CA",{timeZone:"Asia/Jakarta"});
   const todaySales = sales.filter(s=>new Date(s.created_at).toLocaleDateString("en-CA",{timeZone:"Asia/Jakarta"})===todayKey);
   const revenue = todaySales.reduce((sum,s)=>sum+Number(s.total),0);
-  const reportTransactions = useMemo(()=>{
-    const now=new Date();const days=reportPeriod==="all"?null:Number(reportPeriod);
-    const start=days===null?null:new Date(now.getTime()-days*86400000);
-    return sales.filter(s=>!start||new Date(s.created_at)>=start);
-  },[sales,reportPeriod]);
+  const reportRange = useMemo(()=>{
+    const now=new Date();let start=null;let end=new Date(now);
+    const dayStart=d=>{const x=new Date(d);x.setHours(0,0,0,0);return x;};
+    const dayEnd=d=>{const x=new Date(d);x.setHours(23,59,59,999);return x;};
+    if(reportPeriod==="today"){start=dayStart(now);end=dayEnd(now);}
+    else if(reportPeriod==="yesterday"){const d=new Date(now);d.setDate(d.getDate()-1);start=dayStart(d);end=dayEnd(d);}
+    else if(reportPeriod==="week"){const d=dayStart(now);d.setDate(d.getDate()-((d.getDay()+6)%7));start=d;end=dayEnd(now);}
+    else if(reportPeriod==="month"){const d=dayStart(now);d.setDate(1);start=d;end=dayEnd(now);}
+    else if(reportPeriod==="year"){const d=dayStart(now);d.setMonth(0,1);start=d;end=dayEnd(now);}
+    else if(reportPeriod==="custom"){start=reportStartDate?new Date(reportStartDate+"T00:00:00"):null;end=reportEndDate?new Date(reportEndDate+"T23:59:59.999"):null;}
+    else if(reportPeriod!=="all"){start=new Date(now.getTime()-(Number(reportPeriod)||30)*86400000);end=now;}
+    return {start,end};
+  },[reportPeriod,reportStartDate,reportEndDate]);
+  const reportTransactions = useMemo(()=>sales.filter(s=>{
+    const date=new Date(s.created_at);
+    if(reportRange.start&&date<reportRange.start)return false;
+    if(reportRange.end&&date>reportRange.end)return false;
+    if(reportStaffFilter!=="all"&&s.cashier_id!==reportStaffFilter)return false;
+    if(reportPaymentFilter!=="all"&&!(s.sale_payments||[]).some(p=>p.payment_method===reportPaymentFilter))return false;
+    if(reportCategoryFilter!=="all"&&!(s.sale_items||[]).some(i=>products.find(p=>p.id===i.product_id)?.category===reportCategoryFilter))return false;
+    return true;
+  }),[sales,reportRange,reportStaffFilter,reportPaymentFilter,reportCategoryFilter,products]);
   const reportSales = useMemo(()=>reportTransactions.filter(s=>s.status==="paid"),[reportTransactions]);
   const filteredReportTransactions = useMemo(()=>{
     const q=reportSearch.trim().toLowerCase();
-    if(!q)return reportTransactions;
-    return reportTransactions.filter(s=>(s.invoice_no||"").toLowerCase().includes(q)||(s.status||"").toLowerCase().includes(q));
+    return q?reportTransactions.filter(s=>(s.invoice_no||"").toLowerCase().includes(q)||(s.status||"").toLowerCase().includes(q)):reportTransactions;
   },[reportTransactions,reportSearch]);
+  const reportPaymentOptions = useMemo(()=>[...new Set(sales.flatMap(s=>(s.sale_payments||[]).map(p=>p.payment_method).filter(Boolean)))].sort(),[sales]);
+  const reportCategoryOptions = useMemo(()=>[...new Set(products.map(p=>p.category).filter(Boolean))].sort(),[products]);
+  const reportPurchases = useMemo(()=>purchases.filter(p=>{const d=new Date(p.created_at);return (!reportRange.start||d>=reportRange.start)&&(!reportRange.end||d<=reportRange.end);}),[purchases,reportRange]);
+  const inventoryValuation = useMemo(()=>{
+    const ids=new Set(warehouses.filter(w=>w.branch_id===branchId).map(w=>w.id));
+    const costs=new Map(products.map(p=>[p.id,Number(p.cost_price??p.cost)||0]));
+    return inventoryRows.filter(r=>ids.has(r.warehouse_id)).reduce((sum,r)=>sum+(Number(r.quantity)||0)*(costs.get(r.product_id)||0),0);
+  },[inventoryRows,warehouses,branchId,products]);
+  const reportMemberMetrics = useMemo(()=>{
+    const newMembers=customers.filter(c=>{const d=new Date(c.created_at);return (!reportRange.start||d>=reportRange.start)&&(!reportRange.end||d<=reportRange.end);}).length;
+    return {newMembers,silver:customers.filter(c=>(c.membership_tier||"silver")==="silver").length,gold:customers.filter(c=>c.membership_tier==="gold").length,platinum:customers.filter(c=>c.membership_tier==="platinum").length};
+  },[customers,reportRange]);
+  const reportCashEntries = useMemo(()=>cashEntries.filter(x=>{const d=new Date(x.created_at);return (!reportRange.start||d>=reportRange.start)&&(!reportRange.end||d<=reportRange.end);}),[cashEntries,reportRange]);
+  const reportCommissionByStaff = useMemo(()=>{
+    const rows=new Map();
+    for(const x of commissionLedger.filter(x=>x.branch_id===branchId)){const row=rows.get(x.staff_user_id)||{user_id:x.staff_user_id,pending:0,paid:0,total:0};const amount=Number(x.commission_amount)||0;if(x.status==="paid")row.paid+=amount;else if(x.status==="pending")row.pending+=amount;row.total+=amount;rows.set(x.staff_user_id,row);}
+    return [...rows.values()].sort((a,b)=>b.total-a.total);
+  },[commissionLedger,branchId]);
   const reportDaily = useMemo(()=>{
     const days=reportPeriod==="all"?30:Number(reportPeriod);
     const map=new Map();
@@ -712,8 +752,9 @@ export default function App() {
         {page==="Pelanggan"&&<><div className="welcome"><div><span className="eyebrow">CRM</span><h1>Pelanggan</h1><p>Data pelanggan tersimpan di cloud.</p></div><button className="primary" onClick={()=>setShowCustomerForm(v=>!v)}>＋ Tambah pelanggan</button></div>
           {showCustomerForm&&<form className="panel form-grid" onSubmit={saveCustomer}><label>Nama pelanggan<input required value={customerForm.name} onChange={e=>setCustomerForm({...customerForm,name:e.target.value})}/></label><label>Nomor telepon<input value={customerForm.phone} onChange={e=>setCustomerForm({...customerForm,phone:e.target.value})}/></label><label>Email<input type="email" value={customerForm.email} onChange={e=>setCustomerForm({...customerForm,email:e.target.value})}/></label><label>Alamat<input value={customerForm.address} onChange={e=>setCustomerForm({...customerForm,address:e.target.value})}/></label><div className="form-actions"><button className="primary" disabled={busy}>Simpan pelanggan</button></div></form>}
           <section className="panel"><div className="table-wrap"><table><thead><tr><th>ID BARCODE</th><th>NAMA</th><th>MEMBER</th><th>TOTAL BELANJA</th><th>TRANSAKSI</th><th>TELEPON</th></tr></thead><tbody>{customers.map(c=><tr key={c.id}><td><CustomerBarcode customer={c}/></td><td><b>{c.name}</b></td><td><span className={"badge "+(c.membership_tier==="platinum"?"purple":c.membership_tier==="gold"?"yellow":"green")}>{(c.membership_tier||"silver").toUpperCase()}</span></td><td>{money(c.total_spend)}</td><td>{c.total_transactions||0}</td><td>{c.phone||"—"}</td></tr>)}</tbody></table></div>{customers.length===0&&<div className="empty">Belum ada data pelanggan.</div>}</section></>}
-        {page==="Laporan"&&<><div className="welcome"><div><span className="eyebrow">ANALITIK & KEUANGAN</span><h1>Laporan Lengkap</h1><p>Analisis penjualan, transaksi, produk, kategori, pembayaran, dan laba-rugi.</p></div><div className="action-group"><select value={reportPeriod} onChange={e=>setReportPeriod(e.target.value)}><option value="7">7 hari terakhir</option><option value="30">30 hari terakhir</option><option value="90">90 hari terakhir</option><option value="all">Semua data termuat</option></select><button className="secondary" onClick={()=>{const rows=[["Invoice","Status","Tanggal","Jumlah item","Metode pembayaran","Total"],...reportTransactions.map(x=>[x.invoice_no,x.status,x.created_at,(x.sale_items||[]).reduce((n,i)=>n+Number(i.quantity||0),0),(x.sale_payments||[]).map(p=>p.payment_method).join(" + "),x.total])];const csv=rows.map(row=>row.map(v=>'"'+String(v??"").replaceAll('"','""')+'"').join(",")).join("\n");const a=document.createElement("a");a.href=URL.createObjectURL(new Blob(["\ufeff"+csv],{type:"text/csv;charset=utf-8"}));a.download="laporan-transaksi-smart-pos.csv";a.click();URL.revokeObjectURL(a.href);}}>↓ Ekspor transaksi CSV</button></div></div>
-          <div className="stats">{card("Transaksi",reportTransactions.length,"Semua status · data termuat","▣")}{card("Transaksi lunas",reportSales.length,"Periode terpilih","✓")}{card("Omzet lunas",money(profitLoss?.revenue??reportRevenue),"Total penjualan bersih","↗")}{card("Rata-rata transaksi",money(reportSales.length?reportRevenue/reportSales.length:0),"Nilai rata-rata lunas","◷")}</div>
+        {page==="Laporan"&&<><div className="welcome"><div><span className="eyebrow">ANALITIK & KEUANGAN</span><h1>Laporan Lengkap</h1><p>Analisis penjualan, transaksi, produk, kategori, pembayaran, dan laba-rugi.</p></div><div className="action-group"><select aria-label="Periode laporan" value={reportPeriod} onChange={e=>setReportPeriod(e.target.value)}><option value="today">Hari ini</option><option value="yesterday">Kemarin</option><option value="week">Minggu ini</option><option value="month">Bulan ini</option><option value="year">Tahun ini</option><option value="7">7 hari terakhir</option><option value="30">30 hari terakhir</option><option value="90">90 hari terakhir</option><option value="custom">Rentang khusus</option><option value="all">Semua data termuat</option></select>{reportPeriod==="custom"&&<><label className="report-date">Dari<input type="date" value={reportStartDate} onChange={e=>setReportStartDate(e.target.value)}/></label><label className="report-date">Sampai<input type="date" value={reportEndDate} onChange={e=>setReportEndDate(e.target.value)}/></label></>}<button className="secondary" onClick={()=>{const rows=[["Invoice","Status","Tanggal","Jumlah item","Metode pembayaran","Total"],...reportTransactions.map(x=>[x.invoice_no,x.status,x.created_at,(x.sale_items||[]).reduce((n,i)=>n+Number(i.quantity||0),0),(x.sale_payments||[]).map(p=>p.payment_method).join(" + "),x.total])];const csv=rows.map(row=>row.map(v=>'"'+String(v??"").replaceAll('"','""')+'"').join(",")).join("\n");const a=document.createElement("a");a.href=URL.createObjectURL(new Blob(["\ufeff"+csv],{type:"text/csv;charset=utf-8"}));a.download="laporan-transaksi-smart-pos.csv";a.click();URL.revokeObjectURL(a.href);}}>↓ Ekspor transaksi CSV</button></div></div>
+          <div className="report-filter-row"><label>Staff<select value={reportStaffFilter} onChange={e=>setReportStaffFilter(e.target.value)}><option value="all">Semua staff</option>{staffMembers.map(m=><option key={m.user_id} value={m.user_id}>{m.profile?.full_name||m.profile?.employee_code||m.user_id.slice(0,8)}</option>)}</select></label><label>Metode bayar<select value={reportPaymentFilter} onChange={e=>setReportPaymentFilter(e.target.value)}><option value="all">Semua metode</option>{reportPaymentOptions.map(x=><option key={x}>{x}</option>)}</select></label><label>Kategori<select value={reportCategoryFilter} onChange={e=>setReportCategoryFilter(e.target.value)}><option value="all">Semua kategori</option>{reportCategoryOptions.map(x=><option key={x}>{x}</option>)}</select></label></div>
+          <div className="stats">{card("Transaksi",reportTransactions.length,"Semua status · data termuat","▣"){card("Transaksi lunas",reportSales.length,"Periode terpilih","✓")}{card("Omzet lunas",money(profitLoss?.revenue??reportRevenue),"Total penjualan bersih","↗")}{card("Rata-rata transaksi",money(reportSales.length?reportRevenue/reportSales.length:0),"Nilai rata-rata lunas","◷")}</div>
           <section className="panel"><div className="panel-head"><div><h3>Grafik penjualan harian</h3><p>Omzet transaksi lunas per hari · zona waktu WIB.</p></div><span className="badge green">Grafik omzet</span></div>
             {reportDaily.every(x=>x.revenue===0)?<div className="empty">Belum ada penjualan lunas pada periode ini.</div>:<div className="chart-scroll"><div className="chart-bars">{reportDaily.map(row=><div className="chart-column" key={row.key} title={row.key+" · "+money(row.revenue)}><strong>{row.revenue?money(row.revenue):"—"}</strong><div className="chart-bar-track"><span style={{height:Math.max(3,reportDaily.length?row.revenue/Math.max(...reportDaily.map(x=>x.revenue),1)*100:0)+"%"}}/></div><small>{row.label}</small></div>)}</div></div>}
           </section>
@@ -726,6 +767,15 @@ export default function App() {
           </section></div>
           <div className="grid-two"><section className="panel"><div className="panel-head"><div><h3>Penjualan per kategori</h3><p>Kontribusi omzet menurut kategori.</p></div></div>{reportCategories.length===0?<div className="empty">Belum ada data pada periode ini.</div>:<div className="table-wrap"><table><thead><tr><th>KATEGORI</th><th>UNIT</th><th>OMZET</th><th>KONTRIBUSI</th></tr></thead><tbody>{reportCategories.map(row=><tr key={row.name}><td><b>{row.name}</b></td><td>{row.quantity}</td><td className="amount">{money(row.revenue)}</td><td>{reportRevenue?Math.round(row.revenue/reportRevenue*100):0}%</td></tr>)}</tbody></table></div>}</section>
           <section className="panel"><div className="panel-head"><div><h3>Produk terlaris</h3><p>Diurutkan dari omzet terbesar.</p></div></div>{reportItems.length===0?<div className="empty">Belum ada produk terjual.</div>:<div className="table-wrap"><table><thead><tr><th>PRODUK</th><th>UNIT</th><th>OMZET</th></tr></thead><tbody>{reportItems.slice(0,10).map(row=><tr key={row.name+row.category}><td><b>{row.name}</b><small>{row.category}</small></td><td>{row.quantity}</td><td className="amount">{money(row.revenue)}</td></tr>)}</tbody></table></div>}</section></div>
+          <div className="stats">{card("Nilai modal stok",money(inventoryValuation),"Persediaan semua gudang cabang aktif","▤")}{card("Member baru",reportMemberMetrics.newMembers,"Bergabung pada periode terpilih","♙")}{card("Member Silver",reportMemberMetrics.silver,"Database pelanggan","S")}{card("Member Gold / Platinum",reportMemberMetrics.gold+" / "+reportMemberMetrics.platinum,"Database pelanggan","★")}</div>
+          <div className="grid-two"><section className="panel"><div className="panel-head"><div><h3>Laporan pembelian supplier</h3><p>{reportPurchases.length} pembelian pada periode · daftar terbaru yang termuat.</p></div></div>
+            {reportPurchases.length===0?<div className="empty">Tidak ada pembelian pada periode ini.</div>:<div className="table-wrap"><table><thead><tr><th>NOMOR</th><th>TANGGAL</th><th>SUPPLIER</th><th>ITEM</th><th>TOTAL</th><th>SISA HUTANG</th></tr></thead><tbody>{reportPurchases.map(p=><tr key={p.id}><td>{p.purchase_no}</td><td>{new Date(p.created_at).toLocaleDateString("id-ID")}</td><td>{p.suppliers?.name||"—"}</td><td>{(p.purchase_items||[]).reduce((n,i)=>n+Number(i.quantity||0),0)}</td><td>{money(p.total)}</td><td>{p.payable_tracking_enabled?money(Math.max(0,Number(p.total||0)-Number(p.amount_paid||0))):"—"}</td></tr>)}</tbody></table></div>}
+          </section><section className="panel"><div className="panel-head"><div><h3>Komisi per staff</h3><p>Akumulasi ledger komisi cabang aktif.</p></div></div>
+            {reportCommissionByStaff.length===0?<div className="empty">Belum ada data komisi.</div>:<div className="table-wrap"><table><thead><tr><th>STAFF</th><th>TERTUNDA</th><th>DIBAYAR</th><th>TOTAL</th></tr></thead><tbody>{reportCommissionByStaff.map(x=><tr key={x.user_id}><td>{staffMembers.find(m=>m.user_id===x.user_id)?.profile?.full_name||x.user_id.slice(0,8)+"…"}</td><td>{money(x.pending)}</td><td>{money(x.paid)}</td><td className="amount">{money(x.total)}</td></tr>)}</tbody></table></div>}
+          </section></div>
+          <section className="panel"><div className="panel-head"><div><h3>Arus kas tercatat</h3><p>Ringkasan catatan kas pada periode terpilih · maksimal 200 catatan terbaru.</p></div></div>
+            <div className="stats">{card("Uang masuk",money(reportCashEntries.filter(x=>x.entry_type==="income").reduce((n,x)=>n+Number(x.amount||0),0)),"Catatan kas masuk","↗")}{card("Uang keluar",money(reportCashEntries.filter(x=>x.entry_type==="expense").reduce((n,x)=>n+Number(x.amount||0),0)),"Catatan kas keluar","↘")}{card("Arus kas bersih",money(reportCashEntries.reduce((n,x)=>n+(x.entry_type==="income"?1:-1)*Number(x.amount||0),0)),"Masuk dikurangi keluar","⇄")}</div>
+          </section>
           <section className="panel"><div className="panel-head"><div><h3>Daftar transaksi</h3><p>{filteredReportTransactions.length} transaksi ditemukan · maksimum 1.000 transaksi terbaru dimuat.</p></div><input className="report-search" value={reportSearch} onChange={e=>setReportSearch(e.target.value)} placeholder="Cari nomor invoice / status..."/></div>
             <div className="table-wrap"><table><thead><tr><th>INVOICE</th><th>TANGGAL</th><th>STATUS</th><th>JUMLAH ITEM</th><th>METODE BAYAR</th><th>TOTAL</th></tr></thead><tbody>{filteredReportTransactions.map(row=><tr key={row.id}><td><b>{row.invoice_no}</b></td><td>{new Date(row.created_at).toLocaleString("id-ID")}</td><td><span className={"badge "+(row.status==="paid"?"green":row.status==="cancelled"?"red":"yellow")}>{row.status==="paid"?"LUNAS":row.status==="cancelled"?"DIBATALKAN":String(row.status||"").toUpperCase()}</span></td><td>{(row.sale_items||[]).reduce((n,item)=>n+Number(item.quantity||0),0)}</td><td>{(row.sale_payments||[]).map(p=>p.payment_method).filter(Boolean).join(", ")||"—"}</td><td className="amount">{money(row.total)}</td></tr>)}</tbody></table></div>
             {filteredReportTransactions.length===0&&<div className="empty">Tidak ada transaksi yang cocok dengan pencarian.</div>}
