@@ -516,10 +516,27 @@ export default function App() {
     if(!productImageFile)return productForm.image_url||null;
     const file=productImageFile;
     if(!["image/jpeg","image/png","image/webp"].includes(file.type))throw new Error("Foto harus JPG, PNG, atau WebP.");
-    if(file.size>5*1024*1024)throw new Error("Ukuran foto maksimal 5 MB.");
-    const ext=file.type==="image/png"?"png":file.type==="image/webp"?"webp":"jpg";
+    if(file.size>15*1024*1024)throw new Error("Ukuran foto sumber maksimal 15 MB.");
+    let uploadBody=file;
+    try{
+      if(typeof createImageBitmap==="function"){
+        const bitmap=await createImageBitmap(file);
+        const scale=Math.min(1,1600/Math.max(bitmap.width,bitmap.height));
+        const canvas=document.createElement("canvas");
+        canvas.width=Math.max(1,Math.round(bitmap.width*scale));
+        canvas.height=Math.max(1,Math.round(bitmap.height*scale));
+        const context=canvas.getContext("2d");
+        context.drawImage(bitmap,0,0,canvas.width,canvas.height);
+        const compressed=await new Promise(resolve=>canvas.toBlob(resolve,"image/webp",0.86));
+        bitmap.close?.();
+        if(compressed&&compressed.size<file.size)uploadBody=compressed;
+      }
+    }catch(compressError){console.warn("Kompresi foto tidak tersedia; gunakan file asli.",compressError);}
+    if(uploadBody.size>5*1024*1024)throw new Error("Foto setelah kompresi harus maksimal 5 MB. Pilih gambar yang lebih kecil.");
+    const mime=uploadBody.type||file.type;
+    const ext=mime==="image/webp"?"webp":mime==="image/png"?"png":"jpg";
     const path=business.id+"/"+productId+"/"+Date.now()+"-"+crypto.randomUUID()+"."+ext;
-    const {error:uploadError}=await supabase.storage.from("product-images").upload(path,file,{cacheControl:"3600",upsert:false,contentType:file.type});
+    const {error:uploadError}=await supabase.storage.from("product-images").upload(path,uploadBody,{cacheControl:"3600",upsert:false,contentType:mime});
     if(uploadError)throw uploadError;
     return supabase.storage.from("product-images").getPublicUrl(path).data.publicUrl;
   }
