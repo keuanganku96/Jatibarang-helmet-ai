@@ -63,6 +63,7 @@ export default function App() {
   const [paymentDrafts,setPaymentDrafts] = useState({});
   const [sales,setSales] = useState([]);
   const [reportPeriod,setReportPeriod] = useState("30");
+  const [reportSearch,setReportSearch] = useState("");
   const [profitLoss,setProfitLoss] = useState(null);
   const [profitLossLoading,setProfitLossLoading] = useState(false);
   const [cashEntries,setCashEntries] = useState([]);
@@ -92,8 +93,11 @@ export default function App() {
   const [payment,setPayment] = useState("Tunai");
   const [customerId,setCustomerId] = useState("");
   const [showProductForm,setShowProductForm] = useState(false);
+  const [editingProductId,setEditingProductId] = useState("");
+  const [productImageFile,setProductImageFile] = useState(null);
+  const [productImagePreview,setProductImagePreview] = useState("");
   const [showCustomerForm,setShowCustomerForm] = useState(false);
-  const [productForm,setProductForm] = useState({name:"",sku:"",barcode:"",category:"Helm",unit:"pcs",cost_price:"",selling_price:"",discount_type:"none",discount_value:"0",min_stock:"3",initial_quantity:"0",warranty_months:"0",warranty_coverage_percent:"0",warranty_max_amount:"",warranty_min_claim:"0",warranty_max_claims:"1",warranty_terms:""});
+  const [productForm,setProductForm] = useState({name:"",sku:"",barcode:"",category:"Helm",unit:"pcs",cost_price:"",selling_price:"",discount_type:"none",discount_value:"0",min_stock:"3",initial_quantity:"0",warranty_months:"0",warranty_coverage_percent:"0",warranty_max_amount:"",warranty_min_claim:"0",warranty_max_claims:"1",warranty_terms:"",image_url:""});
   const [customerForm,setCustomerForm] = useState({name:"",phone:"",email:"",address:""});
   const [showSupplierForm,setShowSupplierForm] = useState(false);
   const [supplierForm,setSupplierForm] = useState({name:"",phone:"",email:"",address:""});
@@ -122,11 +126,11 @@ export default function App() {
         supabase.from("businesses").select("id,name,currency,timezone").eq("id",businessId).single(),
         supabase.from("branches").select("id,name,is_active").eq("business_id",businessId).eq("is_active",true).order("name"),
         supabase.from("warehouses").select("id,name,branch_id,is_active").eq("business_id",businessId).eq("is_active",true).order("name"),
-        supabase.from("products").select("id,business_id,category_id,sku,barcode,name,unit,cost_price,selling_price,min_stock,discount_type,discount_value,warranty_months,warranty_coverage_percent,warranty_max_amount,warranty_min_claim,warranty_max_claims,warranty_terms,is_active").eq("business_id",businessId).eq("is_active",true).order("name"),
+        supabase.from("products").select("id,business_id,category_id,sku,barcode,name,unit,cost_price,selling_price,min_stock,image_url,discount_type,discount_value,warranty_months,warranty_coverage_percent,warranty_max_amount,warranty_min_claim,warranty_max_claims,warranty_terms,is_active").eq("business_id",businessId).eq("is_active",true).order("name"),
         supabase.from("inventory").select("product_id,warehouse_id,quantity").eq("business_id",businessId),
         supabase.from("categories").select("id,name").eq("business_id",businessId).order("name"),
         supabase.from("customers").select("id,name,customer_code,phone,email,address,total_transactions,total_spend,membership_tier").eq("business_id",businessId).order("name"),
-        (branchId ? supabase.from("sales").select("id,invoice_no,status,total,created_at,customer_id,cashier_id,sale_items(product_id,product_name,quantity,unit_price,unit_cost,discount,line_total)").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("sales").select("id,invoice_no,status,total,created_at,customer_id,cashier_id,sale_items(product_id,product_name,quantity,unit_price,unit_cost,discount,line_total)").eq("business_id",businessId)).order("created_at",{ascending:false}).limit(100),
+        (branchId ? supabase.from("sales").select("id,invoice_no,status,total,created_at,customer_id,cashier_id,sale_items(product_id,product_name,quantity,unit_price,unit_cost,discount,line_total),sale_payments(payment_method,amount,payment_status)").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("sales").select("id,invoice_no,status,total,created_at,customer_id,cashier_id,sale_items(product_id,product_name,quantity,unit_price,unit_cost,discount,line_total)").eq("business_id",businessId )).order("created_at",{ascending:false}).limit(1000),
         supabase.from("suppliers").select("id,name,phone,email,address").eq("business_id",businessId).order("name"),
         (branchId ? supabase.from("purchase_orders").select("id,purchase_no,status,total,amount_paid,payable_tracking_enabled,due_date,supplier_invoice_no,created_at,supplier_id,suppliers(name),purchase_items(quantity)").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("purchase_orders").select("id,purchase_no,status,total,amount_paid,payable_tracking_enabled,due_date,supplier_invoice_no,created_at,supplier_id,suppliers(name),purchase_items(quantity)").eq("business_id",businessId)).order("created_at",{ascending:false}).limit(100),
         (branchId ? supabase.from("supplier_payments").select("id,purchase_id,supplier_id,amount,payment_method,reference_no,notes,created_at").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("supplier_payments").select("id,purchase_id,supplier_id,amount,payment_method,reference_no,notes,created_at").eq("business_id",businessId)).order("created_at",{ascending:false}).limit(300),
@@ -347,12 +351,41 @@ export default function App() {
   const todayKey = new Date().toLocaleDateString("en-CA",{timeZone:"Asia/Jakarta"});
   const todaySales = sales.filter(s=>new Date(s.created_at).toLocaleDateString("en-CA",{timeZone:"Asia/Jakarta"})===todayKey);
   const revenue = todaySales.reduce((sum,s)=>sum+Number(s.total),0);
-  const reportSales = useMemo(()=>{
-    const now = new Date();
-    const days = reportPeriod === "all" ? null : Number(reportPeriod);
-    const start = days === null ? null : new Date(now.getTime()-days*86400000);
-    return sales.filter(s=>s.status === "paid" && (!start || new Date(s.created_at)>=start));
+  const reportTransactions = useMemo(()=>{
+    const now=new Date();const days=reportPeriod==="all"?null:Number(reportPeriod);
+    const start=days===null?null:new Date(now.getTime()-days*86400000);
+    return sales.filter(s=>!start||new Date(s.created_at)>=start);
   },[sales,reportPeriod]);
+  const reportSales = useMemo(()=>reportTransactions.filter(s=>s.status==="paid"),[reportTransactions]);
+  const filteredReportTransactions = useMemo(()=>{
+    const q=reportSearch.trim().toLowerCase();
+    if(!q)return reportTransactions;
+    return reportTransactions.filter(s=>(s.invoice_no||"").toLowerCase().includes(q)||(s.status||"").toLowerCase().includes(q));
+  },[reportTransactions,reportSearch]);
+  const reportDaily = useMemo(()=>{
+    const days=reportPeriod==="all"?30:Number(reportPeriod);
+    const map=new Map();
+    for(const sale of reportSales){
+      const key=new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Jakarta"}).format(new Date(sale.created_at));
+      map.set(key,(map.get(key)||0)+Number(sale.total||0));
+    }
+    const rows=[];
+    for(let offset=days-1;offset>=0;offset--){
+      const d=new Date(Date.now()-offset*86400000);
+      const key=new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Jakarta"}).format(d);
+      rows.push({key,label:new Intl.DateTimeFormat("id-ID",{day:"2-digit",month:"short",timeZone:"Asia/Jakarta"}).format(d),revenue:map.get(key)||0});
+    }
+    return rows;
+  },[reportSales,reportPeriod]);
+  const reportPaymentMethods = useMemo(()=>{
+    const map=new Map();
+    for(const sale of reportSales)for(const payment of sale.sale_payments||[]){
+      if(payment.payment_status&&payment.payment_status!=="paid")continue;
+      const key=payment.payment_method||"Tidak diketahui";
+      map.set(key,(map.get(key)||0)+Number(payment.amount||0));
+    }
+    return [...map.entries()].map(([name,amount])=>({name,amount})).sort((a,b)=>b.amount-a.amount);
+  },[reportSales]);
   const reportRevenue = reportSales.reduce((sum,s)=>sum+Number(s.total||0),0);
   const reportItems = useMemo(()=>{
     const rows = new Map();
@@ -412,24 +445,86 @@ export default function App() {
     await loadData();
   }
 
-  async function saveProduct(e){
-    e.preventDefault();setBusy(true);setError("");
-    const {error:saveError}=await supabase.rpc("create_product_with_stock_discounted",{
-      p_business_id:business.id,p_branch_id:branchId,p_warehouse_id:warehouseId,
-      p_name:productForm.name,p_sku:productForm.sku,p_barcode:productForm.barcode,
-      p_category:productForm.category,p_unit:productForm.unit,
-      p_cost_price:Number(productForm.cost_price)||0,p_selling_price:Number(productForm.selling_price)||0,
-      p_min_stock:Number(productForm.min_stock)||0,p_initial_quantity:Number(productForm.initial_quantity)||0,
+  function beginEditProduct(product){
+    setEditingProductId(product.id);
+    setProductForm({
+      name:product.name||"",sku:product.sku||"",barcode:product.barcode||"",category:product.category||"Umum",
+      unit:product.unit||"pcs",cost_price:String(product.cost_price??product.cost??0),
+      selling_price:String(product.selling_price??product.price??0),discount_type:product.discount_type||product.discountType||"none",
+      discount_value:String(product.discount_value??product.discountValue??0),min_stock:String(product.min_stock??product.min??0),
+      initial_quantity:"0",warranty_months:String(product.warranty_months??0),
+      warranty_coverage_percent:String(product.warranty_coverage_percent??0),
+      warranty_max_amount:product.warranty_max_amount==null?"":String(product.warranty_max_amount),
+      warranty_min_claim:String(product.warranty_min_claim??0),warranty_max_claims:String(product.warranty_max_claims??1),
+      warranty_terms:product.warranty_terms||"",image_url:product.image_url||""
+    });
+    setProductImageFile(null);setProductImagePreview(product.image_url||"");setShowProductForm(true);
+    window.scrollTo({top:0,behavior:"smooth"});
+  }
+
+  function resetProductForm(){
+    setEditingProductId("");setProductImageFile(null);setProductImagePreview("");
+    setProductForm({name:"",sku:"",barcode:"",category:"Helm",unit:"pcs",cost_price:"",selling_price:"",discount_type:"none",discount_value:"0",min_stock:"3",initial_quantity:"0",warranty_months:"0",warranty_coverage_percent:"0",warranty_max_amount:"",warranty_min_claim:"0",warranty_max_claims:"1",warranty_terms:"",image_url:""});
+    setShowProductForm(false);
+  }
+
+  async function uploadProductImage(productId){
+    if(!productImageFile)return productForm.image_url||null;
+    const file=productImageFile;
+    if(!["image/jpeg","image/png","image/webp"].includes(file.type))throw new Error("Foto harus JPG, PNG, atau WebP.");
+    if(file.size>5*1024*1024)throw new Error("Ukuran foto maksimal 5 MB.");
+    const ext=file.type==="image/png"?"png":file.type==="image/webp"?"webp":"jpg";
+    const path=business.id+"/"+productId+"/"+Date.now()+"-"+crypto.randomUUID()+"."+ext;
+    const {error:uploadError}=await supabase.storage.from("product-images").upload(path,file,{cacheControl:"3600",upsert:false,contentType:file.type});
+    if(uploadError)throw uploadError;
+    return supabase.storage.from("product-images").getPublicUrl(path).data.publicUrl;
+  }
+
+  async function updateProductRecord(productId,imageUrl){
+    return await supabase.rpc("update_product_details",{
+      p_product_id:productId,p_name:productForm.name,p_sku:productForm.sku,p_barcode:productForm.barcode,
+      p_category:productForm.category,p_unit:productForm.unit,p_cost_price:Number(productForm.cost_price)||0,
+      p_selling_price:Number(productForm.selling_price)||0,p_min_stock:Number(productForm.min_stock)||0,
       p_discount_type:productForm.discount_type,p_discount_value:Number(productForm.discount_value)||0,
       p_warranty_months:Number(productForm.warranty_months)||0,p_warranty_coverage_percent:Number(productForm.warranty_coverage_percent)||0,
       p_warranty_max_amount:productForm.warranty_max_amount===""?null:Number(productForm.warranty_max_amount),
       p_warranty_min_claim:Number(productForm.warranty_min_claim)||0,p_warranty_max_claims:Number(productForm.warranty_max_claims)||1,
-      p_warranty_terms:productForm.warranty_terms||null
+      p_warranty_terms:productForm.warranty_terms||null,p_image_url:imageUrl
     });
-    setBusy(false);
-    if(saveError){setError(saveError.message);return;}
-    setShowProductForm(false);setProductForm({name:"",sku:"",barcode:"",category:"Helm",unit:"pcs",cost_price:"",selling_price:"",discount_type:"none",discount_value:"0",min_stock:"3",initial_quantity:"0",warranty_months:"0",warranty_coverage_percent:"0",warranty_max_amount:"",warranty_min_claim:"0",warranty_max_claims:"1",warranty_terms:""});
-    setNotice("Produk dan stok awal tersimpan.");await loadData();
+  }
+
+  async function saveProduct(e){
+    e.preventDefault();setBusy(true);setError("");
+    try{
+      if(editingProductId){
+        const imageUrl=await uploadProductImage(editingProductId);
+        const {error:saveError}=await updateProductRecord(editingProductId,imageUrl);
+        if(saveError)throw saveError;
+        setNotice("Perubahan produk berhasil disimpan.");
+      }else{
+        const {data:productId,error:saveError}=await supabase.rpc("create_product_with_stock_discounted",{
+          p_business_id:business.id,p_branch_id:branchId,p_warehouse_id:warehouseId,
+          p_name:productForm.name,p_sku:productForm.sku,p_barcode:productForm.barcode,
+          p_category:productForm.category,p_unit:productForm.unit,
+          p_cost_price:Number(productForm.cost_price)||0,p_selling_price:Number(productForm.selling_price)||0,
+          p_min_stock:Number(productForm.min_stock)||0,p_initial_quantity:Number(productForm.initial_quantity)||0,
+          p_discount_type:productForm.discount_type,p_discount_value:Number(productForm.discount_value)||0,
+          p_warranty_months:Number(productForm.warranty_months)||0,p_warranty_coverage_percent:Number(productForm.warranty_coverage_percent)||0,
+          p_warranty_max_amount:productForm.warranty_max_amount===""?null:Number(productForm.warranty_max_amount),
+          p_warranty_min_claim:Number(productForm.warranty_min_claim)||0,p_warranty_max_claims:Number(productForm.warranty_max_claims)||1,
+          p_warranty_terms:productForm.warranty_terms||null
+        });
+        if(saveError)throw saveError;
+        if(productImageFile){
+          const imageUrl=await uploadProductImage(productId);
+          const {error:imageSaveError}=await updateProductRecord(productId,imageUrl);
+          if(imageSaveError)throw imageSaveError;
+        }
+        setNotice("Produk dan stok awal berhasil disimpan.");
+      }
+      resetProductForm();await loadData();
+    }catch(saveError){setError(saveError.message||"Gagal menyimpan produk.");}
+    finally{setBusy(false);}
   }
 
   async function saveCustomer(e){
@@ -539,7 +634,7 @@ export default function App() {
               {products.filter(p=>p.stock<=p.min).length===0?<div className="empty">Semua stok aman.</div>:products.filter(p=>p.stock<=p.min).map(p=><div className="stock-row" key={p.id}><div><b>{p.name}</b><small>{p.sku||"Tanpa SKU"}</small></div><span className={p.stock===0?"badge red":"badge yellow"}>{p.stock===0?"Habis":p.stock+" tersisa"}</span></div>)}</section></div></>}
         {page==="Kasir"&&<><div className="welcome"><div><span className="eyebrow">POINT OF SALE</span><h1>Kasir</h1><p>Transaksi langsung tercatat ke database cloud.</p></div></div>
           <div className="pos-layout"><section className="panel"><div className="searchbar"><input id="pos-barcode-input" value={search} onChange={e=>setSearch(e.target.value)} onKeyDown={scanProduct} placeholder="Scan barcode / cari nama, SKU..."/><label className="scan-toggle"><input type="checkbox" checked={continuousScan} onChange={e=>setContinuousScan(e.target.checked)}/> Continuous scan</label></div>
-            <div className="product-grid">{filteredProducts.map(p=><button className="product-tile" key={p.id} onClick={()=>addCart(p)} disabled={p.stock<=0}><span className="product-symbol">◇</span><b>{p.name}</b><small>{p.sku||"Tanpa SKU"} · Stok {p.stock}</small><strong>{money(p.price)}</strong></button>)}</div>
+            <div className="product-grid">{filteredProducts.map(p=><button className="product-tile" key={p.id} onClick={()=>addCart(p)} disabled={p.stock<=0}>{p.image_url?<img className="product-thumb" src={p.image_url} alt={p.name}/>:<span className="product-symbol">◇</span>}<b>{p.name}</b><small>{p.sku||"Tanpa SKU"} · Stok {p.stock}</small><strong>{money(p.price)}</strong></button>)}</div>
             {filteredProducts.length===0&&<div className="empty">Belum ada produk. Tambahkan produk melalui menu Produk & Stok.</div>}</section>
             <section className="panel cart-panel"><div className="panel-head"><div><h3>Keranjang</h3><p>{cart.reduce((a,c)=>a+c.qty,0)} item dipilih</p></div><button className="text-btn" onClick={()=>setCart([])}>Kosongkan</button></div>
               {cart.length===0?<div className="empty">Keranjang masih kosong.</div>:cart.map(item=><div className="cart-row" key={item.id}><div><b>{item.name}</b><small>{money(item.price)} / item · Diskon {money(item.discountAmount||0)}</small><label className="discount-edit">Diskon total (Rp)<input type="number" min="0" max={item.price*item.qty} value={item.discountAmount||0} onChange={e=>setCart(old=>old.map(x=>x.id===item.id?{...x,discountAmount:Math.min(x.price*x.qty,Math.max(0,Number(e.target.value)||0))}:x))}/></label></div><div className="qty"><button onClick={()=>setCart(old=>old.map(x=>x.id===item.id?{...x,qty:x.qty-1,discountAmount:x.qty>1?Math.min(x.discountAmount||0,x.price*(x.qty-1)):0}:x).filter(x=>x.qty>0))}>−</button>{item.qty}<button onClick={()=>addCart(products.find(p=>p.id===item.id))}>＋</button></div></div>)}
@@ -547,9 +642,32 @@ export default function App() {
                 <label>Metode pembayaran<select value={payment} onChange={e=>setPayment(e.target.value)}><option>Tunai</option><option>Transfer bank</option><option>QRIS</option><option>Debit</option></select></label></div>
               <div className="total-line"><span>Subtotal</span><strong>{money(cartSubtotal)}</strong></div><div className="total-line"><span>Diskon produk</span><strong>− {money(cartDiscount)}</strong></div>{membershipDiscount>0&&<div className="total-line"><span>Diskon member {selectedTier?.tier_name||"Member"}</span><strong>− {money(membershipDiscount)}</strong></div>}<div className="total-line"><span>Total bayar</span><strong>{money(cartTotal)}</strong></div><button className="primary full" disabled={!cart.length||busy||!warehouseId} onClick={checkout}>Selesaikan transaksi</button>
             </section></div></>}
-        {page==="Produk & Stok"&&<><div className="welcome"><div><span className="eyebrow">INVENTARIS</span><h1>Produk & Stok</h1><p>Katalog dan jumlah stok dari gudang Supabase.</p></div><button className="primary" onClick={()=>setShowProductForm(v=>!v)}>＋ Tambah produk</button></div>
-          {showProductForm&&<form className="panel form-grid" onSubmit={saveProduct}><label>Nama produk<input required value={productForm.name} onChange={e=>setProductForm({...productForm,name:e.target.value})}/></label><label>SKU<input value={productForm.sku} onChange={e=>setProductForm({...productForm,sku:e.target.value})}/></label><label>Barcode<input value={productForm.barcode} onChange={e=>setProductForm({...productForm,barcode:e.target.value})}/></label><label>Kategori<input value={productForm.category} onChange={e=>setProductForm({...productForm,category:e.target.value})}/></label><label>Harga modal<input type="number" min="0" required value={productForm.cost_price} onChange={e=>setProductForm({...productForm,cost_price:e.target.value})}/></label><label>Harga jual<input type="number" min="0" required value={productForm.selling_price} onChange={e=>setProductForm({...productForm,selling_price:e.target.value})}/></label><label>Jenis diskon<select value={productForm.discount_type} onChange={e=>setProductForm({...productForm,discount_type:e.target.value})}><option value="none">Tanpa diskon</option><option value="percent">Persentase (%)</option><option value="fixed">Nominal (Rp) per barang</option></select></label><label>Nilai diskon<input type="number" min="0" max={productForm.discount_type==="percent"?100:undefined} value={productForm.discount_value} onChange={e=>setProductForm({...productForm,discount_value:e.target.value})}/></label><label>Stok minimum<input type="number" min="0" value={productForm.min_stock} onChange={e=>setProductForm({...productForm,min_stock:e.target.value})}/></label><label>Stok awal<input type="number" min="0" value={productForm.initial_quantity} onChange={e=>setProductForm({...productForm,initial_quantity:e.target.value})}/></label><div className="form-section-title">Pengaturan garansi (opsional)</div><label>Masa garansi (bulan)<input type="number" min="0" max="120" value={productForm.warranty_months} onChange={e=>setProductForm({...productForm,warranty_months:e.target.value})}/></label><label>Perlindungan (%)<input type="number" min="0" max="100" step="0.5" value={productForm.warranty_coverage_percent} onChange={e=>setProductForm({...productForm,warranty_coverage_percent:e.target.value})}/></label><label>Batas maksimal perlindungan (Rp)<input type="number" min="0" value={productForm.warranty_max_amount} onChange={e=>setProductForm({...productForm,warranty_max_amount:e.target.value})} placeholder="Kosong = tanpa batas"/></label><label>Minimal nilai klaim (Rp)<input type="number" min="0" value={productForm.warranty_min_claim} onChange={e=>setProductForm({...productForm,warranty_min_claim:e.target.value})}/></label><label>Maksimal jumlah klaim<input type="number" min="1" max="20" value={productForm.warranty_max_claims} onChange={e=>setProductForm({...productForm,warranty_max_claims:e.target.value})}/></label><label className="span-2">Ketentuan garansi<textarea rows="2" maxLength="2000" value={productForm.warranty_terms} onChange={e=>setProductForm({...productForm,warranty_terms:e.target.value})} placeholder="Syarat dan pengecualian garansi"/></label><div className="form-actions"><button className="primary" disabled={busy}>Simpan produk</button><button type="button" className="secondary" onClick={()=>setShowProductForm(false)}>Batal</button></div></form>}
-          <section className="panel"><div className="searchbar"><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Cari produk..."/></div><div className="table-wrap"><table><thead><tr><th>PRODUK</th><th>SKU</th><th>KATEGORI</th><th>HARGA JUAL</th><th>DISKON</th><th>GARANSI</th><th>STOK</th><th>STATUS</th></tr></thead><tbody>{filteredProducts.map(p=><tr key={p.id}><td><b>{p.name}</b></td><td>{p.sku||"—"}</td><td>{p.category}</td><td>{money(p.price)}</td><td>{p.discountType==="percent"?p.discountValue+"%":p.discountType==="fixed"?money(p.discountValue):"—"}</td><td>{Number(p.warranty_months)>0?p.warranty_months+" bln · "+p.warranty_coverage_percent+"%":"—"}</td><td>{p.stock}</td><td><span className={p.stock<=0?"badge red":p.stock<=p.min?"badge yellow":"badge green"}>{p.stock<=0?"Habis":p.stock<=p.min?"Menipis":"Aman"}</span></td></tr>)}</tbody></table></div>{products.length===0&&<div className="empty">Belum ada produk di database.</div>}</section></>}
+        {page==="Produk & Stok"&&<><div className="welcome"><div><span className="eyebrow">INVENTARIS</span><h1>Produk & Stok</h1><p>Katalog dan jumlah stok dari gudang Supabase.</p></div><button className="primary" onClick={()=>{if(showProductForm){resetProductForm();}else{setEditingProductId("");setProductImageFile(null);setProductImagePreview("");setShowProductForm(true);}}}>＋ Tambah produk</button></div>
+          {showProductForm&&<form className="panel form-grid product-editor" onSubmit={saveProduct}>
+            <div className="form-section-title">{editingProductId?"Edit informasi produk":"Tambah produk baru"}</div>
+            <div className="product-photo-field"><div className="product-photo-preview">{productImagePreview?<img src={productImagePreview} alt="Pratinjau foto produk"/>:<span>Foto produk</span>}</div><label>Foto produk (JPG, PNG, WebP · maks. 5 MB)<input type="file" accept="image/jpeg,image/png,image/webp" onChange={e=>{const f=e.target.files?.[0]||null;setProductImageFile(f);if(f){const url=URL.createObjectURL(f);setProductImagePreview(url);}else setProductImagePreview(productForm.image_url||"");}}/></label>{productImageFile&&<button type="button" className="text-btn" onClick={()=>{setProductImageFile(null);setProductImagePreview(productForm.image_url||"");}}>Batalkan foto baru</button>}</div>
+            <label>Nama produk<input required maxLength="180" value={productForm.name} onChange={e=>setProductForm({...productForm,name:e.target.value})}/></label>
+            <label>SKU<input value={productForm.sku} onChange={e=>setProductForm({...productForm,sku:e.target.value})}/></label>
+            <label>Barcode<input value={productForm.barcode} onChange={e=>setProductForm({...productForm,barcode:e.target.value})}/></label>
+            <label>Kategori<input value={productForm.category} onChange={e=>setProductForm({...productForm,category:e.target.value})}/></label>
+            <label>Satuan<input value={productForm.unit} onChange={e=>setProductForm({...productForm,unit:e.target.value})}/></label>
+            <label>Harga modal<input type="number" min="0" required value={productForm.cost_price} onChange={e=>setProductForm({...productForm,cost_price:e.target.value})}/></label>
+            <label>Harga jual<input type="number" min="0" required value={productForm.selling_price} onChange={e=>setProductForm({...productForm,selling_price:e.target.value})}/></label>
+            <label>Jenis diskon<select value={productForm.discount_type} onChange={e=>setProductForm({...productForm,discount_type:e.target.value})}><option value="none">Tanpa diskon</option><option value="percent">Persentase (%)</option><option value="fixed">Nominal (Rp) per barang</option></select></label>
+            <label>Nilai diskon<input type="number" min="0" max={productForm.discount_type==="percent"?100:undefined} value={productForm.discount_value} onChange={e=>setProductForm({...productForm,discount_value:e.target.value})}/></label>
+            <label>Stok minimum<input type="number" min="0" value={productForm.min_stock} onChange={e=>setProductForm({...productForm,min_stock:e.target.value})}/></label>
+            {!editingProductId&&<label>Stok awal<input type="number" min="0" value={productForm.initial_quantity} onChange={e=>setProductForm({...productForm,initial_quantity:e.target.value})}/></label>}
+            {editingProductId&&<div className="notice">Edit produk tidak mengubah stok. Gunakan menu Stok Opname atau Transfer Stok untuk penyesuaian persediaan.</div>}
+            <div className="form-section-title">Pengaturan garansi (opsional)</div>
+            <label>Masa garansi (bulan)<input type="number" min="0" max="120" value={productForm.warranty_months} onChange={e=>setProductForm({...productForm,warranty_months:e.target.value})}/></label>
+            <label>Perlindungan (%)<input type="number" min="0" max="100" step="0.5" value={productForm.warranty_coverage_percent} onChange={e=>setProductForm({...productForm,warranty_coverage_percent:e.target.value})}/></label>
+            <label>Batas maksimal perlindungan (Rp)<input type="number" min="0" value={productForm.warranty_max_amount} onChange={e=>setProductForm({...productForm,warranty_max_amount:e.target.value})} placeholder="Kosong = tanpa batas"/></label>
+            <label>Minimal nilai klaim (Rp)<input type="number" min="0" value={productForm.warranty_min_claim} onChange={e=>setProductForm({...productForm,warranty_min_claim,e.target.value})}/></label>
+            <label>Maksimal jumlah klaim<input type="number" min="1" max="20" value={productForm.warranty_max_claims} onChange={e=>setProductForm({...productForm,warranty_max_claims,e.target.value})}/></label>
+            <label className="span-2">Ketentuan garansi<textarea rows="2" maxLength="2000" value={productForm.warranty_terms} onChange={e=>setProductForm({...productForm,warranty_terms:e.target.value})} placeholder="Syarat dan pengecualian garansi"/></label>
+            <div className="form-actions"><button className="primary" disabled={busy||!warehouseId}>{busy?"Menyimpan...":editingProductId?"Simpan perubahan":"Simpan produk"}</button><button type="button" className="secondary" onClick={resetProductForm}>Batal</button></div>
+          </form>}}
+          <section className="panel"><div className="searchbar"><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Cari produk..."/></div><div className="table-wrap"><table><thead><tr><th>FOTO</th><th>PRODUK</th><th>SKU</th><th>KATEGORI</th><th>HARGA JUAL</th><th>DISKON</th><th>GARANSI</th><th>STOK</th><th>STATUS</th><th>AKSI</th></tr></thead><tbody>{filteredProducts.map(p=><tr key={p.id}><td>{p.image_url?<img className="table-product-image" src={p.image_url} alt={p.name}/>:<span className="muted">—</span>}</td><td><b>{p.name}</b></td><td>{p.sku||"—"}</td><td>{p.category}</td><td>{money(p.price)}</td><td>{p.discountType==="percent"?p.discountValue+"%":p.discountType==="fixed"?money(p.discountValue):"—"}</td><td>{Number(p.warranty_months)>0?p.warranty_months+" bln · "+p.warranty_coverage_percent+"%":"—"}</td><td>{p.stock}</td><td><span className={p.stock<=0?"badge red":p.stock<=p.min?"badge yellow":"badge green"}>{p.stock<=0?"Habis":p.stock<=p.min?"Menipis":"Aman"}</span></td><td><button type="button" className="text-btn" onClick={()=>beginEditProduct(p)}>Edit</button></td></tr>)}</tbody></table></div>{products.length===0&&<div className="empty">Belum ada produk di database.</div>}</section></>}
         {page==="Pemasok"&&<><div className="welcome"><div><span className="eyebrow">MITRA TOKO</span><h1>Pemasok</h1><p>Kelola data pemasok untuk pencatatan pembelian.</p></div><button className="primary" onClick={()=>setShowSupplierForm(v=>!v)}>＋ Tambah pemasok</button></div>
           {showSupplierForm&&<form className="panel form-grid" onSubmit={saveSupplier}><label>Nama pemasok<input required value={supplierForm.name} onChange={e=>setSupplierForm({...supplierForm,name:e.target.value})}/></label><label>Nomor telepon<input value={supplierForm.phone} onChange={e=>setSupplierForm({...supplierForm,phone:e.target.value})}/></label><label>Email<input type="email" value={supplierForm.email} onChange={e=>setSupplierForm({...supplierForm,email:e.target.value})}/></label><label>Alamat<input value={supplierForm.address} onChange={e=>setSupplierForm({...supplierForm,address:e.target.value})}/></label><div className="form-actions"><button className="primary" disabled={busy}>Simpan pemasok</button><button type="button" className="secondary" onClick={()=>setShowSupplierForm(false)}>Batal</button></div></form>}
           <section className="panel"><div className="table-wrap"><table><thead><tr><th>NAMA PEMASOK</th><th>TELEPON</th><th>EMAIL</th><th>ALAMAT</th></tr></thead><tbody>{suppliers.map(s=><tr key={s.id}><td><b>{s.name}</b></td><td>{s.phone||"—"}</td><td>{s.email||"—"}</td><td>{s.address||"—"}</td></tr>)}</tbody></table></div>{suppliers.length===0&&<div className="empty">Belum ada data pemasok.</div>}</section></>}
@@ -594,23 +712,24 @@ export default function App() {
         {page==="Pelanggan"&&<><div className="welcome"><div><span className="eyebrow">CRM</span><h1>Pelanggan</h1><p>Data pelanggan tersimpan di cloud.</p></div><button className="primary" onClick={()=>setShowCustomerForm(v=>!v)}>＋ Tambah pelanggan</button></div>
           {showCustomerForm&&<form className="panel form-grid" onSubmit={saveCustomer}><label>Nama pelanggan<input required value={customerForm.name} onChange={e=>setCustomerForm({...customerForm,name:e.target.value})}/></label><label>Nomor telepon<input value={customerForm.phone} onChange={e=>setCustomerForm({...customerForm,phone:e.target.value})}/></label><label>Email<input type="email" value={customerForm.email} onChange={e=>setCustomerForm({...customerForm,email:e.target.value})}/></label><label>Alamat<input value={customerForm.address} onChange={e=>setCustomerForm({...customerForm,address:e.target.value})}/></label><div className="form-actions"><button className="primary" disabled={busy}>Simpan pelanggan</button></div></form>}
           <section className="panel"><div className="table-wrap"><table><thead><tr><th>ID BARCODE</th><th>NAMA</th><th>MEMBER</th><th>TOTAL BELANJA</th><th>TRANSAKSI</th><th>TELEPON</th></tr></thead><tbody>{customers.map(c=><tr key={c.id}><td><CustomerBarcode customer={c}/></td><td><b>{c.name}</b></td><td><span className={"badge "+(c.membership_tier==="platinum"?"purple":c.membership_tier==="gold"?"yellow":"green")}>{(c.membership_tier||"silver").toUpperCase()}</span></td><td>{money(c.total_spend)}</td><td>{c.total_transactions||0}</td><td>{c.phone||"—"}</td></tr>)}</tbody></table></div>{customers.length===0&&<div className="empty">Belum ada data pelanggan.</div>}</section></>}
-        {page==="Laporan"&&<><div className="welcome"><div><span className="eyebrow">ANALITIK</span><h1>Laporan Penjualan</h1><p>Analisis omzet, produk, dan kategori dari transaksi lunas yang tersimpan.</p></div><div className="action-group"><select value={reportPeriod} onChange={e=>setReportPeriod(e.target.value)}><option value="7">7 hari terakhir</option><option value="30">30 hari terakhir</option><option value="90">90 hari terakhir</option><option value="all">Semua data tersedia</option></select><button className="secondary" onClick={()=>{const rows=[["Invoice","Status","Tanggal","Total"],...reportSales.map(s=>[s.invoice_no,s.status,s.created_at,s.total])];const csv=rows.map(row=>row.map(v=>'"'+String(v??"").replaceAll('"','""')+'"').join(",")).join("\n");const a=document.createElement("a");a.href=URL.createObjectURL(new Blob(["\ufeff"+csv],{type:"text/csv;charset=utf-8"}));a.download="laporan-smart-pos.csv";a.click();URL.revokeObjectURL(a.href);}}>↓ Ekspor CSV</button></div></div>
-          <div className="stats">{card("Transaksi lunas",profitLoss?.sales_count??reportSales.length,"Sesuai periode", "▣")}{card("Total penjualan",money(profitLoss?.revenue??reportRevenue),"Omzet bersih transaksi", "↗")}{card("Rata-rata transaksi",money((profitLoss?.sales_count??reportSales.length)?(Number(profitLoss?.revenue??reportRevenue)/Number(profitLoss?.sales_count??reportSales.length)):0),"Nilai per transaksi", "◷")}{card("Produk terjual",reportItems.reduce((a,x)=>a+x.quantity,0),"Unit dari 100 transaksi terbaru", "▤")}</div>
-          <section className="panel">
-            <div className="panel-head"><div><h3>Laporan laba rugi</h3><p>Perhitungan memakai snapshot modal saat transaksi. Pembayaran utang supplier tidak dihitung sebagai beban operasional.</p></div><span className="badge">{profitLossLoading?"Memuat...":"Cabang aktif"}</span></div>
-            <div className="stats">
-              {card("Penjualan bersih",money(profitLoss?.revenue||0),"Transaksi berstatus lunas","↗")}
-              {card("HPP",Number(profitLoss?.missing_cost_items||0)>0?"Belum lengkap":money(profitLoss?.hpp||0),"Harga modal barang terjual","▤")}
-              {card("Laba kotor",profitLoss?.gross_profit==null?"Belum dapat dihitung":money(profitLoss.gross_profit),"Penjualan bersih − HPP","＋")}
-              {card("Beban operasional",money(profitLoss?.operating_expenses||0),"Tidak termasuk pembayaran supplier","↘")}
-              {card("Pendapatan lain",money(profitLoss?.other_income||0),"Kategori Pendapatan lain","＋")}
-              {card("Laba bersih",profitLoss?.net_profit==null?"Belum dapat dihitung":money(profitLoss.net_profit),"Laba kotor − beban + pendapatan lain","＝")}
-            </div>
-            {Number(profitLoss?.missing_cost_items||0)>0&&<div className="notice warning-note">Ada {profitLoss.missing_cost_items} item dari {profitLoss.missing_cost_sales} transaksi yang belum memiliki snapshot harga modal. Data historis tersebut sengaja tidak dihitung sebagai HPP agar laporan tidak menampilkan laba yang keliru. Transaksi baru akan menyimpan modal saat checkout.</div>}
+        {page==="Laporan"&&<><div className="welcome"><div><span className="eyebrow">ANALITIK & KEUANGAN</span><h1>Laporan Lengkap</h1><p>Analisis penjualan, transaksi, produk, kategori, pembayaran, dan laba-rugi.</p></div><div className="action-group"><select value={reportPeriod} onChange={e=>setReportPeriod(e.target.value)}><option value="7">7 hari terakhir</option><option value="30">30 hari terakhir</option><option value="90">90 hari terakhir</option><option value="all">Semua data termuat</option></select><button className="secondary" onClick={()=>{const rows=[["Invoice","Status","Tanggal","Jumlah item","Metode pembayaran","Total"],...reportTransactions.map(x=>[x.invoice_no,x.status,x.created_at,(x.sale_items||[]).reduce((n,i)=>n+Number(i.quantity||0),0),(x.sale_payments||[]).map(p=>p.payment_method).join(" + "),x.total])];const csv=rows.map(row=>row.map(v=>'"'+String(v??"").replaceAll('"','""')+'"').join(",")).join("\n");const a=document.createElement("a");a.href=URL.createObjectURL(new Blob(["\\ufeff"+csv],{type:"text/csv;charset=utf-8"}));a.download="laporan-transaksi-smart-pos.csv";a.click();URL.revokeObjectURL(a.href);}}>↓ Ekspor transaksi CSV</button></div></div>
+          <div className="stats">{card("Transaksi",reportTransactions.length,"Semua status · data termuat","▣")}{card("Transaksi lunas",reportSales.length,"Periode terpilih","✓")}{card("Omzet lunas",money(profitLoss?.revenue??reportRevenue),"Total penjualan bersih","↗")}{card("Rata-rata transaksi",money(reportSales.length?reportRevenue/reportSales.length:0),"Nilai rata-rata lunas","◷")}</div>
+          <section className="panel"><div className="panel-head"><div><h3>Grafik penjualan harian</h3><p>Omzet transaksi lunas per hari · zona waktu WIB.</p></div><span className="badge green">Grafik omzet</span></div>
+            {reportDaily.every(x=>x.revenue===0)?<div className="empty">Belum ada penjualan lunas pada periode ini.</div>:<div className="chart-scroll"><div className="chart-bars">{reportDaily.map(row=><div className="chart-column" key={row.key} title={row.key+" · "+money(row.revenue)}><strong>{row.revenue?money(row.revenue):"—"}</strong><div className="chart-bar-track"><span style={{height:Math.max(3,reportDaily.length?row.revenue/Math.max(...reportDaily.map(x=>x.revenue),1)*100:0)+"%"}}/></div><small>{row.label}</small></div>)}</div></div>}
           </section>
-          <div className="grid-two"><section className="panel"><div className="panel-head"><div><h3>Penjualan per kategori</h3><p>Diurutkan berdasarkan omzet tertinggi.</p></div></div>{reportCategories.length===0?<div className="empty">Belum ada data pada periode ini.</div>:<div className="table-wrap"><table><thead><tr><th>KATEGORI</th><th>UNIT</th><th>OMZET</th><th>KONTRIBUSI</th></tr></thead><tbody>{reportCategories.map(row=><tr key={row.name}><td><b>{row.name}</b></td><td>{row.quantity}</td><td className="amount">{money(row.revenue)}</td><td>{reportRevenue?Math.round(row.revenue/reportRevenue*100):0}%</td></tr>)}</tbody></table></div>}</section>
-          <section className="panel"><div className="panel-head"><div><h3>Produk terlaris</h3><p>Akumulasi transaksi lunas pada periode.</p></div></div>{reportItems.length===0?<div className="empty">Belum ada produk terjual.</div>:<div className="table-wrap"><table><thead><tr><th>PRODUK</th><th>UNIT</th><th>OMZET</th></tr></thead><tbody>{reportItems.slice(0,10).map(row=><tr key={row.name+row.category}><td><b>{row.name}</b><small>{row.category}</small></td><td>{row.quantity}</td><td className="amount">{money(row.revenue)}</td></tr>)}</tbody></table></div>}</section></div>
-          <section className="panel"><div className="panel-head"><div><h3>Riwayat transaksi</h3><p>Hingga 500 transaksi terbaru dari cabang aktif.</p></div></div><div className="table-wrap"><table><thead><tr><th>INVOICE</th><th>TANGGAL</th><th>STATUS</th><th>JUMLAH ITEM</th><th>TOTAL</th></tr></thead><tbody>{reportSales.map(s=><tr key={s.id}><td>{s.invoice_no}</td><td>{new Date(s.created_at).toLocaleString("id-ID")}</td><td><span className="badge green">LUNAS</span></td><td>{(s.sale_items||[]).reduce((n,item)=>n+Number(item.quantity),0)}</td><td className="amount">{money(s.total)}</td></tr>)}</tbody></table></div>{reportSales.length===0&&<div className="empty">Belum ada transaksi lunas pada periode ini.</div>}</section></>}
+          <div className="grid-two"><section className="panel"><div className="panel-head"><div><h3>Laporan laba rugi</h3><p>HPP memakai snapshot modal saat transaksi. Pembayaran hutang supplier tidak dihitung sebagai beban operasional.</p></div><span className="badge">{profitLossLoading?"Memuat...":"Cabang aktif"}</span></div>
+            <div className="stats">{card("Penjualan bersih",money(profitLoss?.revenue||0),"Transaksi berstatus lunas","↗")}{card("HPP",Number(profitLoss?.missing_cost_items||0)>0?"Belum lengkap":money(profitLoss?.hpp||0),"Harga pokok barang terjual","▤")}{card("Laba kotor",profitLoss?.gross_profit==null?"Belum dapat dihitung":money(profitLoss.gross_profit),"Penjualan bersih − HPP","＋")}{card("Beban operasional",money(profitLoss?.operating_expenses||0),"Tidak termasuk pembayaran supplier","↘")}{card("Pendapatan lain",money(profitLoss?.other_income||0),"Kategori Pendapatan lain","＋")}{card("Laba bersih",profitLoss?.net_profit==null?"Belum dapat dihitung":money(profitLoss.net_profit),"Laba kotor − beban + pendapatan lain","＝")}</div>
+            {Number(profitLoss?.missing_cost_items||0)>0&&<div className="notice warning-note">Ada {profitLoss.missing_cost_items} item dari {profitLoss.missing_cost_sales} transaksi lama yang belum memiliki snapshot modal. Laba historis tersebut tidak dihitung agar tidak menyesatkan.</div>}
+          </section>
+          <section className="panel"><div className="panel-head"><div><h3>Metode pembayaran</h3><p>Total nominal pembayaran untuk transaksi lunas.</p></div></div>
+            {reportPaymentMethods.length===0?<div className="empty">Belum ada data pembayaran.</div>:<div className="report-breakdown">{reportPaymentMethods.map(x=><div className="breakdown-row" key={x.name}><div><b>{x.name}</b><strong>{money(x.amount)}</strong></div><div className="breakdown-track"><span style={{width:(reportPaymentMethods.length?x.amount/Math.max(...reportPaymentMethods.map(y=>y.amount),1)*100:0)+"%"}}/></div></div>)}</div>}
+          </section></div>
+          <div className="grid-two"><section className="panel"><div className="panel-head"><div><h3>Penjualan per kategori</h3><p>Kontribusi omzet menurut kategori.</p></div></div>{reportCategories.length===0?<div className="empty">Belum ada data pada periode ini.</div>:<div className="table-wrap"><table><thead><tr><th>KATEGORI</th><th>UNIT</th><th>OMZET</th><th>KONTRIBUSI</th></tr></thead><tbody>{reportCategories.map(row=><tr key={row.name}><td><b>{row.name}</b></td><td>{row.quantity}</td><td className="amount">{money(row.revenue)}</td><td>{reportRevenue?Math.round(row.revenue/reportRevenue*100):0}%</td></tr>)}</tbody></table></div>}</section>
+          <section className="panel"><div className="panel-head"><div><h3>Produk terlaris</h3><p>Diurutkan dari omzet terbesar.</p></div></div>{reportItems.length===0?<div className="empty">Belum ada produk terjual.</div>:<div className="table-wrap"><table><thead><tr><th>PRODUK</th><th>UNIT</th><th>OMZET</th></tr></thead><tbody>{reportItems.slice(0,10).map(row=><tr key={row.name+row.category}><td><b>{row.name}</b><small>{row.category}</small></td><td>{row.quantity}</td><td className="amount">{money(row.revenue)}</td></tr>)}</tbody></table></div>}</section></div>
+          <section className="panel"><div className="panel-head"><div><h3>Daftar transaksi</h3><p>{filteredReportTransactions.length} transaksi ditemukan · maksimum 1.000 transaksi terbaru dimuat.</p></div><input className="report-search" value={reportSearch} onChange={e=>setReportSearch(e.target.value)} placeholder="Cari nomor invoice / status..."/></div>
+            <div className="table-wrap"><table><thead><tr><th>INVOICE</th><th>TANGGAL</th><th>STATUS</th><th>JUMLAH ITEM</th><th>METODE BAYAR</th><th>TOTAL</th></tr></thead><tbody>{filteredReportTransactions.map(row=><tr key={row.id}><td><b>{row.invoice_no}</b></td><td>{new Date(row.created_at).toLocaleString("id-ID")}</td><td><span className={"badge "+(row.status==="paid"?"green":row.status==="cancelled"?"red":"yellow")}>{row.status==="paid"?"LUNAS":row.status==="cancelled"?"DIBATALKAN":String(row.status||"").toUpperCase()}</span></td><td>{(row.sale_items||[]).reduce((n,item)=>n+Number(item.quantity||0),0)}</td><td>{(row.sale_payments||[]).map(p=>p.payment_method).filter(Boolean).join(", ")||"—"}</td><td className="amount">{money(row.total)}</td></tr>)}</tbody></table></div>
+            {filteredReportTransactions.length===0&&<div className="empty">Tidak ada transaksi yang cocok dengan pencarian.</div>}
+          </section></>}
         {page==="Keuangan"&&<><div className="welcome"><div><span className="eyebrow">FINANCIAL MANAGEMENT</span><h1>Keuangan</h1><p>Ringkasan uang masuk dan pengeluaran yang tercatat di database untuk cabang aktif.</p></div></div>
           <div className="stats">{card("Uang masuk",money(cashEntries.filter(x=>x.entry_type==="income").reduce((a,x)=>a+Number(x.amount),0)),"Maks. 200 catatan terbaru","↗")}{card("Pengeluaran",money(cashEntries.filter(x=>x.entry_type==="expense").reduce((a,x)=>a+Number(x.amount),0)),"Maks. 200 catatan terbaru","↘")}{card("Arus kas bersih",money(cashEntries.reduce((a,x)=>a+(x.entry_type==="income"?1:-1)*Number(x.amount),0)),"Masuk dikurangi keluar","⇄")}{card("Catatan kas",cashEntries.length+" transaksi","Cabang aktif","▤")}</div>
           {["owner","admin","manager"].includes(membership?.role)&&<form className="panel form-grid" onSubmit={saveExpense}><div><h3>Catat pengeluaran</h3><p className="muted">Hanya Owner, Admin, dan Manager yang dapat menyimpan pengeluaran.</p></div><label>Kategori<select value={expenseForm.category} onChange={e=>setExpenseForm({...expenseForm,category:e.target.value})}><option>Operasional</option><option>Transportasi</option><option>Listrik & Air</option><option>Gaji</option><option>Pemasaran</option><option>Perawatan</option><option>Lainnya</option></select></label><label>Keterangan<input required maxLength="500" value={expenseForm.description} onChange={e=>setExpenseForm({...expenseForm,description:e.target.value})} placeholder="Contoh: pembelian perlengkapan toko"/></label><label>Nominal (Rp)<input required type="number" min="1" step="1" value={expenseForm.amount} onChange={e=>setExpenseForm({...expenseForm,amount:e.target.value})} placeholder="100000"/></label><div className="form-actions"><button className="primary" disabled={busy}>Simpan pengeluaran</button></div></form>}
