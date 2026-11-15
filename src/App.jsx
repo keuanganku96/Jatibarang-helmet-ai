@@ -4,7 +4,7 @@ import JsBarcode from "jsbarcode";
 
 const money = value => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(Number(value) || 0);
 const BUSINESS_ID = "8552ecbe-a62e-41b9-b274-b855f6b5e37b";
-const NAV = [["Dashboard","▦"],["Kasir","▣"],["Produk & Stok","▤"],["Stok Opname","▧"],["Transfer Stok","⇄"],["Pembelian","⇧"],["Pemasok","♧"],["Pelanggan","♙"],["Garansi","✓"],["Laporan","▥"],["Keuangan","Rp"],["Karyawan & Shift","♙"],["Pengaturan","⚙"]];
+const NAV = [["Dashboard","▦"],["Kasir","▣"],["Retur Penjualan","↩"],["Produk & Stok","▤"],["Stok Opname","▧"],["Transfer Stok","⇄"],["Pembelian","⇧"],["Pemasok","♧"],["Pelanggan","♙"],["Garansi","✓"],["Laporan","▥"],["Keuangan","Rp"],["Karyawan & Shift","♙"],["Pengaturan","⚙"]];
 
 function getStaffDeviceId(){let id=localStorage.getItem("smartpos_device_id");if(!id){id=crypto.randomUUID();localStorage.setItem("smartpos_device_id",id);}return id;}
 function Login({onLogin}){
@@ -63,6 +63,13 @@ export default function App() {
   const [supplierPayments,setSupplierPayments] = useState([]);
   const [paymentDrafts,setPaymentDrafts] = useState({});
   const [sales,setSales] = useState([]);
+  const [saleReturns,setSaleReturns] = useState([]);
+  const [returnSearch,setReturnSearch] = useState("");
+  const [selectedReturnSaleId,setSelectedReturnSaleId] = useState("");
+  const [returnQtyDraft,setReturnQtyDraft] = useState({});
+  const [returnReason,setReturnReason] = useState("");
+  const [returnMethod,setReturnMethod] = useState("Tunai");
+  const [returnRestock,setReturnRestock] = useState(true);
   const [reportPeriod,setReportPeriod] = useState("30");
   const [reportSearch,setReportSearch] = useState("");
   const [reportStaffFilter,setReportStaffFilter] = useState("all");
@@ -130,7 +137,7 @@ export default function App() {
       if(!member) throw new Error("Akun ini belum terdaftar sebagai anggota bisnis. Hubungi Owner.");
       const businessId = member.business_id;
       localStorage.setItem("smartpos_business_id", businessId);
-      const [bizRes,branchRes,warehouseRes,productRes,inventoryRes,categoryRes,customerRes,salesRes,suppliersRes,purchasesRes,paymentsRes,cashRes,tiersRes,warrantiesRes,claimsRes,attendanceRes,shiftRes,opnameRes,transferRes] = await Promise.all([
+      const [bizRes,branchRes,warehouseRes,productRes,inventoryRes,categoryRes,customerRes,salesRes,suppliersRes,purchasesRes,paymentsRes,cashRes,tiersRes,warrantiesRes,claimsRes,attendanceRes,shiftRes,opnameRes,transferRes,returnsRes] = await Promise.all([
         supabase.from("businesses").select("id,name,currency,timezone").eq("id",businessId).single(),
         supabase.from("branches").select("id,name,is_active").eq("business_id",businessId).eq("is_active",true).order("name"),
         supabase.from("warehouses").select("id,name,branch_id,is_active").eq("business_id",businessId).eq("is_active",true).order("name"),
@@ -138,7 +145,7 @@ export default function App() {
         supabase.from("inventory").select("product_id,warehouse_id,quantity").eq("business_id",businessId),
         supabase.from("categories").select("id,name").eq("business_id",businessId).order("name"),
         supabase.from("customers").select("id,name,customer_code,phone,email,address,total_transactions,total_spend,membership_tier,created_at").eq("business_id",businessId).order("name"),
-        (branchId ? supabase.from("sales").select("id,invoice_no,status,total,created_at,customer_id,cashier_id,sale_items(product_id,product_name,quantity,unit_price,unit_cost,discount,line_total),sale_payments(payment_method,amount,payment_status)").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("sales").select("id,invoice_no,status,total,created_at,customer_id,cashier_id,sale_items(product_id,product_name,quantity,unit_price,unit_cost,discount,line_total)").eq("business_id",businessId )).order("created_at",{ascending:false}).limit(1000),
+        (branchId ? supabase.from("sales").select("id,invoice_no,status,total,created_at,customer_id,cashier_id,sale_items(id,product_id,product_name,quantity,unit_price,unit_cost,discount,line_total),sale_payments(payment_method,amount,payment_status)").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("sales").select("id,invoice_no,status,total,created_at,customer_id,cashier_id,sale_items(id,product_id,product_name,quantity,unit_price,unit_cost,discount,line_total)").eq("business_id",businessId )).order("created_at",{ascending:false}).limit(1000),
         supabase.from("suppliers").select("id,name,phone,email,address").eq("business_id",businessId).order("name"),
         (branchId ? supabase.from("purchase_orders").select("id,purchase_no,status,total,amount_paid,payable_tracking_enabled,due_date,supplier_invoice_no,created_at,supplier_id,suppliers(name),purchase_items(quantity,unit_cost,line_total)").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("purchase_orders").select("id,purchase_no,status,total,amount_paid,payable_tracking_enabled,due_date,supplier_invoice_no,created_at,supplier_id,suppliers(name),purchase_items(quantity)").eq("business_id",businessId)).order("created_at",{ascending:false}).limit(100),
         (branchId ? supabase.from("supplier_payments").select("id,purchase_id,supplier_id,amount,payment_method,reference_no,notes,created_at").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("supplier_payments").select("id,purchase_id,supplier_id,amount,payment_method,reference_no,notes,created_at").eq("business_id",businessId)).order("created_at",{ascending:false}).limit(300),
@@ -149,9 +156,10 @@ export default function App() {
         (branchId ? supabase.from("staff_attendance").select("id,business_id,branch_id,user_id,work_date,clock_in_at,clock_out_at,clock_in_note,clock_out_note").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("staff_attendance").select("id,business_id,branch_id,user_id,work_date,clock_in_at,clock_out_at,clock_in_note,clock_out_note").eq("business_id",businessId)).order("work_date",{ascending:false}).limit(100),
         (branchId ? supabase.from("cash_register_sessions").select("id,business_id,branch_id,cashier_id,opened_at,opening_float,closed_at,expected_cash,counted_cash,cash_difference,cash_sales,cash_outflows,opening_note,closing_note,status").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("cash_register_sessions").select("id,business_id,branch_id,cashier_id,opened_at,opening_float,closed_at,expected_cash,counted_cash,cash_difference,cash_sales,cash_outflows,opening_note,closing_note,status").eq("business_id",businessId)).order("opened_at",{ascending:false}).limit(100),
         (branchId ? supabase.from("stock_opnames").select("id,business_id,branch_id,warehouse_id,opname_no,status,notes,total_lines,total_difference,created_at,approved_at").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("stock_opnames").select("id,business_id,branch_id,warehouse_id,opname_no,status,notes,total_lines,total_difference,created_at,approved_at").eq("business_id",businessId)).order("created_at",{ascending:false}).limit(100),
-        supabase.from("stock_transfers").select("id,business_id,from_branch_id,to_branch_id,from_warehouse_id,to_warehouse_id,transfer_no,status,notes,total_lines,created_at,approved_at").eq("business_id",businessId).order("created_at",{ascending:false}).limit(100)
+        supabase.from("stock_transfers").select("id,business_id,from_branch_id,to_branch_id,from_warehouse_id,to_warehouse_id,transfer_no,status,notes,total_lines,created_at,approved_at").eq("business_id",businessId).order("created_at",{ascending:false}).limit(100),
+        (branchId ? supabase.from("sale_returns").select("id,business_id,branch_id,sale_id,return_no,reason,refund_method,refund_amount,restock,created_at,sale_return_items(id,sale_item_id,product_name,quantity,refund_amount)").eq("business_id",businessId).eq("branch_id",branchId) : supabase.from("sale_returns").select("id,business_id,branch_id,sale_id,return_no,reason,refund_method,refund_amount,restock,created_at,sale_return_items(id,sale_item_id,product_name,quantity,refund_amount)").eq("business_id",businessId)).order("created_at",{ascending:false}).limit(300)
       ]);
-      for(const result of [bizRes,branchRes,warehouseRes,productRes,inventoryRes,categoryRes,customerRes,salesRes,suppliersRes,purchasesRes,paymentsRes,cashRes,tiersRes,warrantiesRes,claimsRes,attendanceRes,shiftRes,opnameRes,transferRes]) if(result.error) throw result.error;
+      for(const result of [bizRes,branchRes,warehouseRes,productRes,inventoryRes,categoryRes,customerRes,salesRes,suppliersRes,purchasesRes,paymentsRes,cashRes,tiersRes,warrantiesRes,claimsRes,attendanceRes,shiftRes,opnameRes,transferRes,returnsRes]) if(result.error) throw result.error;
       let staffMembersData = [];
       if (["owner","admin","manager"].includes(member.role)) {
         const [membersRes,profilesRes] = await Promise.all([
@@ -189,7 +197,7 @@ export default function App() {
       setBusiness(bizRes.data); setMembership(member); setBranches(accessibleBranches); setWarehouses(warehouseRes.data); setInventoryRows(inventoryRes.data||[]);
       setBranchId(activeBranch?.id||""); setWarehouseId(activeWarehouse?.id||"");
       setProducts(productRes.data.map(p=>({...p,category:categoryMap[p.category_id]||"Umum",stock:stockMap[p.id]||0,price:Number(p.selling_price),cost:Number(p.cost_price),min:Number(p.min_stock),discountType:p.discount_type||"none",discountValue:Number(p.discount_value)||0})));
-      setCustomers(customerRes.data); setSales(salesRes.data); setMembershipTiers(tiersRes.data||[]);
+      setCustomers(customerRes.data); setSales(salesRes.data); setSaleReturns(returnsRes.data||[]); setMembershipTiers(tiersRes.data||[]);
       setSuppliers(suppliersRes.data); setPurchases(purchasesRes.data); setSupplierPayments(paymentsRes.data||[]); setCashEntries(cashRes.data||[]); setWarranties(warrantiesRes.data||[]); setWarrantyClaims(claimsRes.data||[]); setAttendanceRows(attendanceRes.data||[]); setCashSessions(shiftRes.data||[]); setStockOpnames(opnameRes.data||[]); setStockTransfers(transferRes.data||[]); setStaffMembers(staffMembersData);
     } catch(e) { setError(e.message||"Gagal memuat data toko."); }
     finally { setBusy(false); }
@@ -499,6 +507,23 @@ export default function App() {
     await loadData();
   }
 
+  async function processSaleReturn(e){
+    e.preventDefault();
+    const sale=sales.find(x=>x.id===selectedReturnSaleId);
+    if(!sale){setError("Pilih transaksi yang akan diretur.");return;}
+    const items=(sale.sale_items||[]).map(i=>({sale_item_id:i.id,quantity:Number(returnQtyDraft[i.id])||0})).filter(i=>i.quantity>0);
+    if(!items.length){setError("Masukkan jumlah barang yang diretur.");return;}
+    if(!returnReason.trim()){setError("Alasan retur wajib diisi.");return;}
+    if(!window.confirm("Proses retur untuk invoice "+sale.invoice_no+"? Dana akan dicatat sebagai pengeluaran dan stok akan dikembalikan sesuai pilihan."))return;
+    setBusy(true);setError("");
+    const {data,error:e2}=await supabase.rpc("process_sale_return",{p_sale_id:sale.id,p_items:items,p_reason:returnReason.trim(),p_refund_method:returnMethod,p_restock:returnRestock});
+    setBusy(false);
+    if(e2){setError(e2.message);return;}
+    const result=data?.[0];
+    setNotice("Retur "+(result?.return_no||"berhasil")+" diproses. Pengembalian dana "+money(result?.refund_amount||0)+".");
+    setReturnQtyDraft({});setReturnReason("");setSelectedReturnSaleId("");await loadData();
+  }
+
   function beginEditProduct(product){
     const productRule=commissionRules.filter(r=>r.product_id===product.id).sort((a,b)=>Number(b.branch_id===branchId)-Number(a.branch_id===branchId))[0];
     setEditingProductId(product.id);
@@ -725,6 +750,15 @@ export default function App() {
                 <label>Metode pembayaran<select value={payment} onChange={e=>setPayment(e.target.value)}><option>Tunai</option><option>Transfer bank</option><option>QRIS</option><option>Debit</option></select></label></div>
               <div className="total-line"><span>Subtotal</span><strong>{money(cartSubtotal)}</strong></div><div className="total-line"><span>Diskon produk</span><strong>− {money(cartDiscount)}</strong></div>{membershipDiscount>0&&<div className="total-line"><span>Diskon member {selectedTier?.tier_name||"Member"}</span><strong>− {money(membershipDiscount)}</strong></div>}<div className="total-line"><span>Total bayar</span><strong>{money(cartTotal)}</strong></div><button className="primary full" disabled={!cart.length||busy||!warehouseId} onClick={checkout}>Selesaikan transaksi</button>
             </section></div></>}
+        {page==="Retur Penjualan"&&<><div className="welcome"><div><span className="eyebrow">REFUND & INVENTORY CONTROL</span><h1>Retur Penjualan</h1><p>Proses pengembalian sebagian atau seluruh barang dari invoice. Setiap retur tercatat di kas, stok, dan audit.</p></div><button className="secondary" onClick={loadData}>↻ Segarkan</button></div>
+          {["owner","admin","manager"].includes(membership?.role)?<section className="panel"><div className="panel-head"><div><h3>Buat retur dari invoice</h3><p>Jumlah retur dibatasi oleh sisa barang yang belum pernah dikembalikan.</p></div></div>
+            <label>Cari nomor invoice<input value={returnSearch} onChange={e=>setReturnSearch(e.target.value)} placeholder="Ketik nomor invoice"/></label>
+            <label>Pilih transaksi<select value={selectedReturnSaleId} onChange={e=>{setSelectedReturnSaleId(e.target.value);setReturnQtyDraft({});}}><option value="">Pilih invoice lunas</option>{sales.filter(s=>["paid","refunded"].includes(s.status)&&(!returnSearch||s.invoice_no.toLowerCase().includes(returnSearch.toLowerCase()))).map(s=><option key={s.id} value={s.id}>{s.invoice_no} · {new Date(s.created_at).toLocaleDateString("id-ID")} · {money(s.total)}{s.status==="refunded"?" · Diretur penuh":""}</option>)}</select></label>
+            {(()=>{const sale=sales.find(s=>s.id===selectedReturnSaleId);if(!sale)return <div className="empty">Pilih invoice untuk melihat barang yang dapat diretur.</div>;return <form onSubmit={processSaleReturn}><div className="table-wrap"><table><thead><tr><th>PRODUK</th><th>TERJUAL</th><th>SUDAH DIRETUR</th><th>SISA</th><th>JUMLAH RETUR</th></tr></thead><tbody>{(sale.sale_items||[]).map(item=>{const returned=saleReturns.flatMap(r=>r.sale_return_items||[]).filter(x=>x.sale_item_id===item.id).reduce((sum,x)=>sum+Number(x.quantity||0),0);const remaining=Math.max(0,Number(item.quantity)-returned);return <tr key={item.id}><td>{item.product_name}</td><td>{item.quantity}</td><td>{returned}</td><td>{remaining}</td><td><input aria-label={"Jumlah retur "+item.product_name} type="number" min="0" max={remaining} step="0.001" value={returnQtyDraft[item.id]||""} disabled={remaining<=0} onChange={e=>setReturnQtyDraft(old=>({...old,[item.id]:e.target.value}))}/></td></tr>;})}</tbody></table></div>
+              <div className="form-grid"><label>Alasan retur<input required minLength="3" maxLength="500" value={returnReason} onChange={e=>setReturnReason(e.target.value)} placeholder="Contoh: ukuran tidak sesuai"/></label><label>Metode pengembalian dana<select value={returnMethod} onChange={e=>setReturnMethod(e.target.value)}><option>Tunai</option><option>Transfer bank</option><option>QRIS</option><option>Debit</option></select></label><label className="check-label"><input type="checkbox" checked={returnRestock} onChange={e=>setReturnRestock(e.target.checked)}/> Barang layak jual, kembalikan ke stok gudang asal</label></div><div className="form-actions"><button className="primary" disabled={busy}>Proses retur & pengembalian dana</button></div></form>;})()}
+          </section>:<div className="panel"><div className="notice">Retur hanya dapat diproses oleh Owner, Admin, atau Manager.</div></div>}
+          <section className="panel"><div className="panel-head"><div><h3>Riwayat retur</h3><p>Daftar pengembalian dana yang tercatat di cabang aktif.</p></div></div><div className="table-wrap"><table><thead><tr><th>TANGGAL</th><th>NO. RETUR</th><th>INVOICE</th><th>ALASAN</th><th>METODE</th><th>STOK</th><th>DANA KEMBALI</th></tr></thead><tbody>{saleReturns.map(r=><tr key={r.id}><td>{new Date(r.created_at).toLocaleString("id-ID")}</td><td>{r.return_no}</td><td>{sales.find(s=>s.id===r.sale_id)?.invoice_no||"—"}</td><td>{r.reason}</td><td>{r.refund_method}</td><td>{r.restock?"Dikembalikan":"Tidak"}</td><td className="amount">{money(r.refund_amount)}</td></tr>)}</tbody></table></div>{saleReturns.length===0&&<div className="empty">Belum ada retur pada cabang ini.</div>}</section>
+        </>}
         {page==="Produk & Stok"&&<><div className="welcome"><div><span className="eyebrow">INVENTARIS</span><h1>Produk & Stok</h1><p>Katalog dan jumlah stok dari gudang Supabase.</p></div><button className="primary" onClick={()=>{if(showProductForm){resetProductForm();}else{setEditingProductId("");setProductImageFile(null);setProductImagePreview("");setShowProductForm(true);}}}>＋ Tambah produk</button></div>
           {showProductForm&&<form className="panel form-grid product-editor" onSubmit={saveProduct}>
             <div className="form-section-title">{editingProductId?"Edit informasi produk":"Tambah produk baru"}</div>
