@@ -101,7 +101,10 @@ export default function App() {
   const [expenseForm,setExpenseForm] = useState({category:"Operasional",description:"",amount:""});
   const [cart,setCart] = useState([]);
   const [receiptData,setReceiptData] = useState(null);
-  const [receiptWidth,setReceiptWidth] = useState("58");
+  const [receiptWidth,setReceiptWidth] = useState(()=>localStorage.getItem("smartpos_receipt_width")==="80"?"80":"58");
+  const [printerName,setPrinterName] = useState(()=>localStorage.getItem("smartpos_printer_name")||"");
+  useEffect(()=>{localStorage.setItem("smartpos_receipt_width",receiptWidth);},[receiptWidth]);
+  useEffect(()=>{localStorage.setItem("smartpos_printer_name",printerName);},[printerName]);
   const [search,setSearch] = useState("");
   const [continuousScan,setContinuousScan] = useState(true);
   const [customerScan,setCustomerScan] = useState("");
@@ -596,6 +599,15 @@ export default function App() {
     w.document.open();w.document.write(html);w.document.close();
   }
 
+  function printPrinterTest(){
+    const width=receiptWidth==="80"?"80mm":"58mm";
+    const inner=receiptWidth==="80"?"76":"54";
+    const html='<!doctype html><html><head><meta charset="utf-8"><title>Tes Printer Thermal</title><style>@page{size:'+width+' auto;margin:2mm}*{box-sizing:border-box}html,body{width:'+inner+'mm;margin:0;padding:0;font-family:Arial,sans-serif;color:#000}main{text-align:center;padding:4px;font-size:11px}.brand{font-size:15px;font-weight:800;margin:8px 0}.dash{border-top:1px dashed #000;margin:8px 0}.sample{font-size:10px;text-align:left;margin:8px 0}.total{font-size:14px;font-weight:800;margin:8px 0}</style></head><body><main><div class="brand">JATIBARANG HELMET</div><div>TES PRINTER THERMAL</div><div class="dash"></div><div class="sample">Ukuran kertas: '+width+'<br>Printer: '+(printerName.replace(/[&<>"]/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[ch])))+'<br>Teks: ABCDEFGHIJKLMNOPQRSTUVWXYZ<br>Angka: 0123456789<br>Harga: Rp 125.000</div><div class="dash"></div><div class="total">TES CETAK BERHASIL</div><div>SMART POS JATIBARANG</div><div>Terima kasih</div></main><script>window.onload=function(){setTimeout(function(){window.print()},250)};<\\/script></body></html>';
+    const w=window.open("","_blank","width=420,height=700");
+    if(!w){setError("Izinkan pop-up browser untuk mencetak tes printer.");return;}
+    w.document.open();w.document.write(html);w.document.close();
+  }
+
   async function recordReceivablePayment(e){
     e.preventDefault();
     const sale=receivableRows.find(s=>s.id===selectedReceivableId);
@@ -1016,6 +1028,7 @@ export default function App() {
           <section className="panel"><div className="panel-head"><div><h3>Riwayat shift kasir</h3><p>Rekonsiliasi uang tunai per kasir dan cabang.</p></div></div><div className="table-wrap"><table><thead><tr><th>DIBUKA</th><th>KASIR</th><th>MODAL AWAL</th><th>PENJUALAN TUNAI</th><th>PENGELUARAN</th><th>UANG SEHARUSNYA</th><th>UANG FISIK</th><th>SELISIH</th><th>STATUS</th></tr></thead><tbody>{cashSessions.map(s=><tr key={s.id}><td>{new Date(s.opened_at).toLocaleString("id-ID")}</td><td>{s.cashier_id===session.user.id?"Akun saya":s.cashier_id.slice(0,8)+"…"}</td><td>{money(s.opening_float)}</td><td>{s.status==="closed"?money(s.cash_sales):"Berjalan"}</td><td>{s.status==="closed"?money(s.cash_outflows):"—"}</td><td>{s.status==="closed"?money(s.expected_cash):"—"}</td><td>{s.status==="closed"?money(s.counted_cash):"—"}</td><td>{s.status==="closed"?<b className={Number(s.cash_difference)===0?"text-safe":"danger-text"}>{money(s.cash_difference)}</b>:"—"}</td><td><span className={"badge "+(s.status==="closed"?"green":"yellow")}>{s.status==="closed"?"Ditutup":"Terbuka"}</span></td></tr>)}</tbody></table></div>{cashSessions.length===0&&<div className="empty">Belum ada shift kasir.</div>}</section>
         </>}
         {page==="Pengaturan"&&<><div className="welcome"><div><span className="eyebrow">KONFIGURASI</span><h1>Pengaturan</h1><p>Informasi koneksi dan lokasi operasional.</p></div></div><section className="panel settings"><h3>{business?.name}</h3><p>SMART POS JATIBARANG</p><div className="setting-row"><span>Akun aktif</span><b>{session.user.email}</b></div><div className="setting-row"><span>Peran</span><b>{membership?.role}</b></div><div className="setting-row"><span>Cabang</span><b>{branches.find(b=>b.id===branchId)?.name||"—"}</b></div><div className="setting-row"><span>Gudang</span><b>{warehouses.find(w=>w.id===warehouseId)?.name||"—"}</b></div><div className="setting-row"><span>Penyimpanan</span><b className="badge green">Supabase Cloud</b></div><div className="setting-row"><span>Sinkronisasi</span><b className="badge green">Aktif</b></div><p className="warning-note">Transaksi kasir menggunakan prosedur database atomik agar penjualan, pembayaran, kas, dan pengurangan stok tercatat bersama-sama.</p><button className="secondary" onClick={loadData}>↻ Segarkan data</button></section>
+          <section className="panel settings"><div className="panel-head"><div><span className="eyebrow">PERANGKAT KASIR</span><h3>Pengaturan Printer</h3><p>Atur ukuran kertas thermal default untuk struk transaksi.</p></div></div><div className="form-grid"><label>Ukuran kertas default<select value={receiptWidth} onChange={e=>setReceiptWidth(e.target.value)}><option value="58">Thermal 58 mm</option><option value="80">Thermal 80 mm</option></select></label><label>Nama printer (opsional)<input value={printerName} onChange={e=>setPrinterName(e.target.value)} placeholder="Contoh: Bluetooth Thermal Printer"/></label></div><div className="notice" style={{marginTop:12}}>Ukuran kertas tersimpan otomatis di perangkat ini. Saat mencetak, pilih printer yang sudah terhubung pada menu cetak Android/browser dan samakan ukuran kertasnya.</div><div className="form-actions" style={{marginTop:12}}><button className="primary" type="button" onClick={printPrinterTest}>Cetak Tes</button></div></section>
           <section className="panel"><div className="panel-head"><div><h3>Aturan membership</h3><p>Atur syarat kenaikan Silver, Gold, dan Platinum. Tingkat aktif dihitung otomatis dari transaksi lunas pelanggan.</p></div></div>
           {membershipTiers.map(t=><form key={t.tier_code} className="form-grid tier-form" onSubmit={e=>{e.preventDefault();saveMembershipTier(t);}}>
             <label>Nama tingkat<input value={t.tier_name} onChange={e=>setMembershipTiers(rows=>rows.map(x=>x.id===t.id?{...x,tier_name:e.target.value}:x))}/></label>
