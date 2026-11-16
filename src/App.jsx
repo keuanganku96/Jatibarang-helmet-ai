@@ -606,7 +606,7 @@ export default function App() {
       status:(result?.balance_due??Math.max(0,cartTotal-paid))>0?"BELUM LUNAS":"LUNAS"
     };
     setReceiptData(completedReceipt);
-    if(autoPrintReceipt){try{await printReceiptViaBluetoothBridge(completedReceipt);setNotice("Transaksi tersimpan dan struk berhasil dikirim ke printer Bluetooth.");}catch(printError){setError("Transaksi sudah tersimpan, tetapi struk belum tercetak: "+(printError.message||"Pastikan aplikasi Cleanter aktif dan printer terhubung."));}}
+    if(autoPrintReceipt){try{await printReceiptViaBluetoothBridge(completedReceipt);setReceiptData(null);setNotice("Transaksi tersimpan dan struk berhasil dikirim ke printer Bluetooth.");}catch(printError){setError("Transaksi sudah tersimpan, tetapi struk belum tercetak: "+(printError.message||"Pastikan aplikasi Cleanter aktif dan printer terhubung."));}}
     setCart([]);setCustomerId("");setPaymentLines([{payment_method:"Tunai",amount:"",payment_reference:""}]);setPaymentDueDate("");setPaymentNotes("");setFullCredit(false);
     setNotice("Invoice "+(result?.invoice_no||"")+" tersimpan. Dibayar "+money(result?.paid_amount||0)+", kembalian "+money(changeAmount)+", sisa piutang "+money(result?.balance_due||0)+".");
     await loadData();
