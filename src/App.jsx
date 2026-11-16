@@ -564,21 +564,21 @@ export default function App() {
 
   async function checkout(){
     if(!cart.length||!warehouseId||!branchId)return;
-    const autoPrintWindow=autoPrintReceipt?window.open("","_blank","width=420,height=700"):null;
-    if(autoPrintReceipt&&!autoPrintWindow){setError("Izinkan pop-up untuk cetak otomatis, atau matikan opsi cetak otomatis.");return;}
     const payments=fullCredit?[]:paymentLines.map(line=>({...line,amount:line.amount===""&&paymentLines.length===1?cartTotal:Number(line.amount)||0})).filter(line=>line.amount>0);
     const paid=payments.reduce((sum,line)=>sum+line.amount,0);
     if(paid>cartTotal){setError("Total pembayaran tidak boleh melebihi total transaksi.");return;}
     if(paid<cartTotal&&(!customerId||!paymentDueDate)){setError("Untuk uang muka/piutang, pilih pelanggan dan isi tanggal jatuh tempo.");return;}
     if(paymentLines.length>1&&payments.length!==paymentLines.length){setError("Isi nominal setiap metode pembayaran split bill.");return;}
     if(!payments.length&&cartTotal>0&&!fullCredit){setError("Masukkan minimal satu pembayaran atau pilih opsi seluruhnya piutang.");return;}
+    const autoPrintWindow=autoPrintReceipt?window.open("","_blank","width=420,height=700"):null;
+    if(autoPrintReceipt&&!autoPrintWindow){setError("Izinkan pop-up untuk cetak otomatis, atau matikan opsi cetak otomatis.");return;}
     setBusy(true);setError("");
     const {data,error:checkoutError}=await supabase.rpc("checkout_sale_with_payments",{
       p_business_id:business.id,p_branch_id:branchId,p_warehouse_id:warehouseId,
       p_customer_id:customerId||null,p_items:cart.map(item=>({product_id:item.id,quantity:item.qty,discount_amount:Number(item.discountAmount)||0})),
       p_payments:payments,p_due_date:paid<cartTotal?paymentDueDate:null,p_receivable_notes:paymentNotes||null
     });
-    if(checkoutError){setError(checkoutError.message);setBusy(false);return;}
+    if(checkoutError){if(autoPrintWindow)autoPrintWindow.close();setError(checkoutError.message);setBusy(false);return;}
     const result=data?.[0];
     const completedReceipt={
       invoiceNo:result?.invoice_no||"—",
