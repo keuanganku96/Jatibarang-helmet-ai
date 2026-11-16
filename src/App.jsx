@@ -666,8 +666,10 @@ export default function App() {
   }
 
   async function printReceiptWithDrawer(data=receiptData,targetWindow=null){
+    const reservedWindow=targetWindow||window.open("","_blank","width=420,height=700");
+    if(!reservedWindow){setError("Izinkan pop-up browser untuk mencetak struk.");return;}
     if(autoOpenCashDrawer)await kickCashDrawer();
-    printThermalReceipt(data,targetWindow);
+    printThermalReceipt(data,reservedWindow);
   }
 
   async function connectUsbPrinter(){
