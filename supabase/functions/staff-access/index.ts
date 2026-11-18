@@ -45,6 +45,13 @@ async function ownerContext(req: Request, businessId: string) {
   return { user, member };
 }
 
+async function deviceBranchIsActive(businessId: string, branchId: string) {
+  const { data: branch, error } = await admin.from("branches").select("id")
+    .eq("id", branchId).eq("business_id", businessId).eq("is_active", true).maybeSingle();
+  if (error) throw error;
+  return Boolean(branch);
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "Method tidak didukung." }, 405);
@@ -115,6 +122,9 @@ Deno.serve(async (req: Request) => {
       if (!validUuid(business_id) || !validUuid(device_id)) return json({ error: "Perangkat belum dikenali." }, 400);
       const { data: device } = await admin.from("staff_devices").select("device_id,business_id,branch_id").eq("device_id", device_id).eq("business_id", business_id).is("revoked_at", null).maybeSingle();
       if (!device) return json({ error: "Perangkat belum disetujui Owner." }, 403);
+      if (!(await deviceBranchIsActive(business_id, device.branch_id))) {
+        return json({ error: "Cabang perangkat sudah tidak aktif atau tidak tersedia." }, 403);
+      }
       const { data: activeMembers, error: memberError } = await admin.from("business_members").select("user_id").eq("business_id", business_id).eq("branch_id", device.branch_id).eq("is_active", true);
       if (memberError) throw memberError;
       const activeIds = (activeMembers ?? []).map((m: {user_id:string}) => m.user_id);
@@ -129,11 +139,21 @@ Deno.serve(async (req: Request) => {
       if (!validUuid(business_id) || !validUuid(device_id) || !/^\d{6}$/.test(String(pin ?? ""))) return json({ error: "Kode karyawan atau PIN tidak valid." }, 400);
       const { data: device } = await admin.from("staff_devices").select("device_id,business_id,branch_id").eq("device_id", device_id).eq("business_id", business_id).is("revoked_at", null).maybeSingle();
       if (!device) return json({ error: "Perangkat ini belum disetujui Owner." }, 403);
+      if (!(await deviceBranchIsActive(business_id, device.branch_id))) {
+        return json({ error: "Cabang perangkat sudah tidak aktif atau tidak tersedia." }, 403);
+      }
       const code = String(employee_code ?? "").trim().toUpperCase();
       const { data: profile } = await admin.from("staff_profiles").select("id,user_id,business_id,branch_id,employee_code,full_name").eq("business_id", business_id).eq("branch_id", device.branch_id).eq("employee_code", code).maybeSingle();
       if (!profile) return json({ error: "Kode karyawan atau PIN salah." }, 401);
-      const { data: member } = await admin.from("business_members").select("is_active").eq("business_id", business_id).eq("user_id", profile.user_id).maybeSingle();
-      if (!member?.is_active) return json({ error: "Akun karyawan tidak aktif." }, 403);
+      const { data: member, error: memberError } = await admin.from("business_members")
+        .select("user_id,branch_id,is_active")
+        .eq("business_id", business_id)
+        .eq("user_id", profile.user_id)
+        .eq("branch_id", device.branch_id)
+        .eq("is_active", true)
+        .maybeSingle();
+      if (memberError) throw memberError;
+      if (!member) return json({ error: "Akun karyawan tidak aktif atau tidak ditugaskan pada cabang perangkat ini." }, 403);
       const { data: credential } = await admin.from("staff_pin_credentials").select("pin_hash,failed_attempts,locked_until").eq("staff_profile_id", profile.id).maybeSingle();
       if (!credential) return json({ error: "PIN belum diatur oleh Owner." }, 403);
       if (credential.locked_until && new Date(credential.locked_until) > new Date()) return json({ error: "PIN terkunci sementara. Hubungi Owner atau tunggu 10 menit." }, 429);
