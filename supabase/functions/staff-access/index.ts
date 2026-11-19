@@ -136,15 +136,73 @@ Deno.serve(async (req: Request) => {
 
     if (action === "staff_login") {
       const { business_id, device_id, employee_code, pin } = body;
-      if (!validUuid(business_id) || !validUuid(device_id) || !/^\d{6}$/.test(String(pin ?? ""))) return json({ error: "Kode karyawan atau PIN tidak valid." }, 400);
-      const { data: device } = await admin.from("staff_devices").select("device_id,business_id,branch_id").eq("device_id", device_id).eq("business_id", business_id).is("revoked_at", null).maybeSingle();
+      if (!validUuid(business_id) || !validUuid(device_id)) return json({ error: "Perangkat ini belum dapat digunakan." }, 400);
+
+      const { data: device, error: deviceError } = await admin.from("staff_devices")
+        .select("device_id,business_id,branch_id")
+        .eq("device_id", device_id)
+        .eq("business_id", business_id)
+        .is("revoked_at", null)
+        .maybeSingle();
+      if (deviceError) throw deviceError;
       if (!device) return json({ error: "Perangkat ini belum disetujui Owner." }, 403);
       if (!(await deviceBranchIsActive(business_id, device.branch_id))) {
         return json({ error: "Cabang perangkat sudah tidak aktif atau tidak tersedia." }, 403);
       }
-      const code = String(employee_code ?? "").trim().toUpperCase();
-      const { data: profile } = await admin.from("staff_profiles").select("id,user_id,business_id,branch_id,employee_code,full_name").eq("business_id", business_id).eq("branch_id", device.branch_id).eq("employee_code", code).maybeSingle();
-      if (!profile) return json({ error: "Kode karyawan atau PIN salah." }, 401);
+
+      const { data: deviceLimit, error: deviceLimitError } = await admin.from("staff_device_pin_limits")
+        .select("failed_attempts,locked_until")
+        .eq("business_id", business_id)
+        .eq("device_id", device_id)
+        .maybeSingle();
+      if (deviceLimitError) throw deviceLimitError;
+      if (deviceLimit?.locked_until && new Date(deviceLimit.locked_until).getTime() > Date.now()) {
+        return json({ error: "Terlalu banyak percobaan PIN pada perangkat ini. Tunggu 15 menit sebelum mencoba kembali." }, 429);
+      }
+
+      const code = String(employee_code ?? "").trim().toUpperCase().slice(0, 32);
+      const pinValue = String(pin ?? "");
+      const recordDeviceFailure = async (staffProfileId: string | null = null) => {
+        const { data, error } = await admin.rpc("record_staff_device_pin_attempt", {
+          p_business_id: business_id,
+          p_device_id: device_id,
+          p_success: false,
+        });
+        if (error) throw error;
+        const { error: auditError } = await admin.from("staff_pin_audit").insert({
+          business_id,
+          staff_profile_id: staffProfileId,
+          device_id,
+          event_type: "login_failed",
+          details: { employee_code: code, branch_id: device.branch_id },
+        });
+        if (auditError) throw auditError;
+        return data?.[0]?.locked_until ?? null;
+      };
+
+      if (!/^[A-Z0-9_-]{2,32}$/.test(code) || !/^[0-9]{6}$/.test(pinValue)) {
+        const deviceLockedUntil = await recordDeviceFailure(null);
+        return json(
+          { error: deviceLockedUntil ? "Terlalu banyak percobaan. Perangkat dikunci selama 15 menit." : "Kode karyawan atau PIN salah." },
+          deviceLockedUntil ? 429 : 401,
+        );
+      }
+
+      const { data: profile, error: profileError } = await admin.from("staff_profiles")
+        .select("id,user_id,business_id,branch_id,employee_code,full_name")
+        .eq("business_id", business_id)
+        .eq("branch_id", device.branch_id)
+        .eq("employee_code", code)
+        .maybeSingle();
+      if (profileError) throw profileError;
+      if (!profile) {
+        const deviceLockedUntil = await recordDeviceFailure(null);
+        return json(
+          { error: deviceLockedUntil ? "Terlalu banyak percobaan. Perangkat dikunci selama 15 menit." : "Kode karyawan atau PIN salah." },
+          deviceLockedUntil ? 429 : 401,
+        );
+      }
+
       const { data: member, error: memberError } = await admin.from("business_members")
         .select("user_id,branch_id,is_active")
         .eq("business_id", business_id)
@@ -153,28 +211,86 @@ Deno.serve(async (req: Request) => {
         .eq("is_active", true)
         .maybeSingle();
       if (memberError) throw memberError;
-      if (!member) return json({ error: "Akun karyawan tidak aktif atau tidak ditugaskan pada cabang perangkat ini." }, 403);
-      const { data: credential } = await admin.from("staff_pin_credentials").select("pin_hash,failed_attempts,locked_until").eq("staff_profile_id", profile.id).maybeSingle();
-      if (!credential) return json({ error: "PIN belum diatur oleh Owner." }, 403);
-      if (credential.locked_until && new Date(credential.locked_until) > new Date()) return json({ error: "PIN terkunci sementara. Hubungi Owner atau tunggu 10 menit." }, 429);
-      if (credential.locked_until && new Date(credential.locked_until) <= new Date()) {
-        await admin.rpc("reset_staff_pin_failures", { p_staff_profile_id: profile.id });
+      if (!member) {
+        const deviceLockedUntil = await recordDeviceFailure(profile.id);
+        return json(
+          { error: deviceLockedUntil ? "Terlalu banyak percobaan. Perangkat dikunci selama 15 menit." : "Kode karyawan atau PIN salah." },
+          deviceLockedUntil ? 429 : 401,
+        );
       }
-      if (!(await verifyPin(String(pin), credential.pin_hash))) {
-        const { data: failures } = await admin.rpc("record_staff_pin_failure", { p_staff_profile_id: profile.id });
-        await admin.from("staff_pin_audit").insert({ business_id, staff_profile_id: profile.id, device_id, event_type: "login_failed", details: { employee_code: code } });
-        const locked = failures?.[0]?.locked_until;
-        return json({ error: locked ? "Terlalu banyak percobaan. PIN dikunci selama 10 menit." : "Kode karyawan atau PIN salah." }, locked ? 429 : 401);
+
+      const { data: credential, error: credentialError } = await admin.from("staff_pin_credentials")
+        .select("pin_hash,failed_attempts,locked_until")
+        .eq("staff_profile_id", profile.id)
+        .maybeSingle();
+      if (credentialError) throw credentialError;
+      if (!credential) {
+        const deviceLockedUntil = await recordDeviceFailure(profile.id);
+        return json(
+          { error: deviceLockedUntil ? "Terlalu banyak percobaan. Perangkat dikunci selama 15 menit." : "Kode karyawan atau PIN salah." },
+          deviceLockedUntil ? 429 : 401,
+        );
       }
-      await admin.rpc("reset_staff_pin_failures", { p_staff_profile_id: profile.id });
+
+      if (credential.locked_until && new Date(credential.locked_until).getTime() > Date.now()) {
+        await recordDeviceFailure(profile.id);
+        return json({ error: "PIN karyawan terkunci sementara. Tunggu 10 menit sebelum mencoba kembali." }, 429);
+      }
+      if (credential.locked_until && new Date(credential.locked_until).getTime() <= Date.now()) {
+        const { error: resetError } = await admin.rpc("reset_staff_pin_failures", { p_staff_profile_id: profile.id });
+        if (resetError) throw resetError;
+      }
+
+      if (!(await verifyPin(pinValue, credential.pin_hash))) {
+        const [{ data: userFailures, error: userFailureError }, deviceLockedUntil] = await Promise.all([
+          admin.rpc("record_staff_pin_failure", { p_staff_profile_id: profile.id }),
+          recordDeviceFailure(profile.id),
+        ]);
+        if (userFailureError) throw userFailureError;
+        const userLockedUntil = userFailures?.[0]?.locked_until ?? null;
+        const locked = Boolean(userLockedUntil || deviceLockedUntil);
+        return json(
+          { error: locked ? "Terlalu banyak percobaan. Akses PIN dikunci sementara." : "Kode karyawan atau PIN salah." },
+          locked ? 429 : 401,
+        );
+      }
+
+      const [userReset, deviceReset] = await Promise.all([
+        admin.rpc("reset_staff_pin_failures", { p_staff_profile_id: profile.id }),
+        admin.rpc("record_staff_device_pin_attempt", {
+          p_business_id: business_id,
+          p_device_id: device_id,
+          p_success: true,
+        }),
+      ]);
+      if (userReset.error) throw userReset.error;
+      if (deviceReset.error) throw deviceReset.error;
+
       const { data: authUser, error: getUserError } = await admin.auth.admin.getUserById(profile.user_id);
       if (getUserError || !authUser.user?.email) throw getUserError ?? new Error("Akun karyawan tidak tersedia.");
       const { data: linkData, error: linkError } = await admin.auth.admin.generateLink({ type: "magiclink", email: authUser.user.email });
       if (linkError || !linkData.properties?.hashed_token) throw linkError ?? new Error("Gagal membuat sesi login.");
-      await admin.from("staff_pin_audit").insert({ business_id, staff_profile_id: profile.id, device_id, event_type: "login_success", details: { branch_id: device.branch_id } });
-      return json({ ok: true, token_hash: linkData.properties.hashed_token, type: "magiclink", staff: { id: profile.id, user_id: profile.user_id, name: profile.full_name, employee_code: profile.employee_code, branch_id: profile.branch_id } });
+      const { error: auditError } = await admin.from("staff_pin_audit").insert({
+        business_id,
+        staff_profile_id: profile.id,
+        device_id,
+        event_type: "login_success",
+        details: { branch_id: device.branch_id },
+      });
+      if (auditError) throw auditError;
+      return json({
+        ok: true,
+        token_hash: linkData.properties.hashed_token,
+        type: "magiclink",
+        staff: {
+          id: profile.id,
+          user_id: profile.user_id,
+          name: profile.full_name,
+          employee_code: profile.employee_code,
+          branch_id: profile.branch_id,
+        },
+      });
     }
-
     if (action === "revoke_device") {
       const { business_id, device_id } = body;
       if (!validUuid(business_id) || !validUuid(device_id)) return json({ error: "Data perangkat tidak valid." }, 400);
