@@ -95,26 +95,68 @@ Deno.serve(async (req: Request) => {
       if (!branch) return json({ error: "Cabang tidak ditemukan atau tidak aktif." }, 404);
 
       const userId = crypto.randomUUID();
-      const profileId = crypto.randomUUID();
-      const syntheticEmail = `staff+${userId}@jatibarang-helmet.com`;
-      const generatedPassword = `${crypto.randomUUID()}-${crypto.randomUUID()}-Aa9!`;
+      const syntheticEmail = "staff+" + userId + "@jatibarang-helmet.com";
+      const generatedPassword = crypto.randomUUID() + "-" + crypto.randomUUID() + "-Aa9!";
+      const pin_hash = await hashPin(String(pin));
       const { data: created, error: createError } = await admin.auth.admin.createUser({ id: userId, email: syntheticEmail, password: generatedPassword, email_confirm: true, user_metadata: { display_name: String(full_name).trim().slice(0, 120), account_type: "staff" } });
       if (createError || !created.user) throw createError ?? new Error("Gagal membuat akun karyawan.");
-      const memberInsert = await admin.from("business_members").insert({ business_id, user_id: created.user.id, branch_id, role: String(role ?? "cashier"), is_active: true });
-      if (memberInsert.error) { await admin.auth.admin.deleteUser(created.user.id); throw memberInsert.error; }
-      const profileInsert = await admin.from("staff_profiles").insert({
-        id: profileId, business_id, user_id: created.user.id, branch_id, employee_code: String(employee_code).trim().toUpperCase(),
-        full_name: String(full_name).trim().slice(0, 120), phone: phone ? String(phone).slice(0, 30) : null,
-        job_title: job_title ? String(job_title).slice(0, 80) : null,
-        commission_type: ["percent", "per_unit", "none"].includes(String(commission_type)) ? commission_type : "none",
-        commission_value: Math.max(0, Number(commission_value) || 0),
+
+      const { data: staffProfileId, error: provisionError } = await admin.rpc("create_staff_records_from_edge", {
+        p_business_id: business_id,
+        p_branch_id: branch_id,
+        p_user_id: created.user.id,
+        p_employee_code: String(employee_code).trim().toUpperCase(),
+        p_full_name: String(full_name).trim().slice(0, 120),
+        p_phone: phone ? String(phone).slice(0, 30) : null,
+        p_job_title: job_title ? String(job_title).slice(0, 80) : null,
+        p_role: String(role ?? "cashier"),
+        p_commission_type: ["percent", "per_unit", "none"].includes(String(commission_type)) ? String(commission_type) : "none",
+        p_commission_value: Math.max(0, Number(commission_value) || 0),
+        p_pin_hash,
+        p_created_by: user.id,
       });
-      if (profileInsert.error) { await admin.from("staff_profiles").delete().eq("id", profileId); await admin.from("business_members").delete().eq("business_id", business_id).eq("user_id", created.user.id); await admin.auth.admin.deleteUser(created.user.id); throw profileInsert.error; }
-      const pin_hash = await hashPin(String(pin));
-      const credentialInsert = await admin.from("staff_pin_credentials").insert({ staff_profile_id: profileId, business_id, pin_hash });
-      if (credentialInsert.error) { await admin.from("staff_profiles").delete().eq("id", profileId); await admin.from("business_members").delete().eq("business_id", business_id).eq("user_id", created.user.id); await admin.auth.admin.deleteUser(created.user.id); throw credentialInsert.error; }
-      await admin.from("staff_pin_audit").insert({ business_id, staff_profile_id: profileId, event_type: "created", details: { created_by: user.id, employee_code } });
-      return json({ ok: true, staff_profile_id: profileId, user_id: created.user.id, employee_code: String(employee_code).trim().toUpperCase(), message: "Akun karyawan dan PIN berhasil dibuat." });
+
+      if (provisionError || !staffProfileId) {
+        // The RPC may have committed even if its response was interrupted.
+        // Check the unique user/business pair before deleting the Auth user.
+        const { data: committedProfile, error: verifyError } = await admin
+          .from("staff_profiles")
+          .select("id")
+          .eq("business_id", business_id)
+          .eq("user_id", created.user.id)
+          .maybeSingle();
+
+        if (verifyError) {
+          console.error("staff provisioning outcome unknown", { user_id: created.user.id, error: verifyError.message });
+          return json({ error: "Status penyimpanan karyawan belum dapat dipastikan. Periksa daftar karyawan sebelum mengulang." }, 503);
+        }
+
+        if (committedProfile) {
+          return json({
+            ok: true,
+            staff_profile_id: committedProfile.id,
+            user_id: created.user.id,
+            employee_code: String(employee_code).trim().toUpperCase(),
+            message: "Akun karyawan dan PIN berhasil dibuat.",
+          });
+        }
+
+        const { error: cleanupError } = await admin.auth.admin.deleteUser(created.user.id);
+        if (cleanupError) {
+          console.error("staff provisioning Auth cleanup failed", { user_id: created.user.id, error: cleanupError.message });
+          return json({ error: "Penyimpanan data karyawan gagal dan akun Auth sementara belum dapat dibersihkan otomatis." }, 500);
+        }
+
+        throw provisionError ?? new Error("Gagal menyimpan data karyawan.");
+      }
+
+      return json({
+        ok: true,
+        staff_profile_id: staffProfileId,
+        user_id: created.user.id,
+        employee_code: String(employee_code).trim().toUpperCase(),
+        message: "Akun karyawan dan PIN berhasil dibuat.",
+      });
     }
 
     if (action === "list_staff") {
