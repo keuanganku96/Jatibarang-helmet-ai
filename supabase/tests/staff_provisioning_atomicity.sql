@@ -8,6 +8,7 @@ DECLARE
   v_branch_id uuid;
   v_owner_id uuid;
   v_test_user_id uuid := pg_catalog.gen_random_uuid();
+  v_hash text := 'pbkdf2-sha256$310000$' || repeat('A',22) || '==' || '$' || repeat('B',43) || '=';
   v_proc regprocedure :=
     'public.create_staff_records_from_edge(uuid,uuid,uuid,text,text,text,text,text,text,numeric,text,uuid)'::regprocedure;
 BEGIN
@@ -32,7 +33,6 @@ BEGIN
     RAISE EXCEPTION 'No active Owner and branch available for rollback-only tests';
   END IF;
 
-  -- A non-owner actor must be rejected before any row is written.
   BEGIN
     PERFORM public.create_staff_records_from_edge(
       v_business_id, v_branch_id, v_test_user_id,
@@ -49,7 +49,6 @@ BEGIN
     END IF;
   END;
 
-  -- A valid Owner and branch with an invalid PIN hash must also be rejected.
   BEGIN
     PERFORM public.create_staff_records_from_edge(
       v_business_id, v_branch_id, v_test_user_id,
@@ -66,12 +65,39 @@ BEGIN
     END IF;
   END;
 
+  BEGIN
+    PERFORM public.create_staff_records_from_edge(
+      v_business_id, v_branch_id, v_owner_id,
+      'ATOMIC-OWNER-TEST', 'Test Karyawan', NULL, NULL,
+      'cashier', 'none', 0, v_hash, v_owner_id
+    );
+    RAISE EXCEPTION 'TEST_FAILURE: existing Owner was accepted as new staff';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM = 'TEST_FAILURE: existing Owner was accepted as new staff' THEN
+      RAISE;
+    END IF;
+    IF SQLERRM NOT LIKE '%sudah terdaftar pada bisnis ini%' THEN
+      RAISE;
+    END IF;
+  END;
+
+  BEGIN
+    PERFORM public.create_staff_records_from_edge(
+      v_business_id, v_branch_id, v_test_user_id,
+      'ATOMIC-STAFF-TEST', 'Test Karyawan', NULL, NULL,
+      'cashier', 'none', 0, v_hash, v_owner_id
+    );
+    RAISE EXCEPTION 'TEST_FAILURE: non-existent Auth ID was accepted';
+  EXCEPTION WHEN foreign_key_violation THEN
+    NULL;
+  END;
+
   IF EXISTS (
     SELECT 1 FROM public.business_members
     WHERE business_id = v_business_id AND user_id = v_test_user_id
   ) OR EXISTS (
     SELECT 1 FROM public.staff_profiles
-    WHERE business_id = v_business_id AND employee_code = 'ATOMIC-STAFF-TEST'
+    WHERE business_id = v_business_id AND employee_code IN ('ATOMIC-STAFF-TEST','ATOMIC-OWNER-TEST')
   ) THEN
     RAISE EXCEPTION 'A failed provisioning attempt left partial staff records';
   END IF;
