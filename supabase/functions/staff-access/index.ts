@@ -1,0 +1,350 @@
+import { createClient } from "npm:@supabase/supabase-js@2";
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+}
+function b64(bytes: Uint8Array) { let s = ""; for (const b of bytes) s += String.fromCharCode(b); return btoa(s); }
+function unb64(value: string) { return Uint8Array.from(atob(value), c => c.charCodeAt(0)); }
+async function hashPin(pin: string) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", salt, iterations: 310000, hash: "SHA-256" }, key, 256);
+  return `pbkdf2-sha256$310000$${b64(salt)}$${b64(new Uint8Array(bits))}`;
+}
+async function verifyPin(pin: string, stored: string) {
+  const [kind, iterationsText, saltText, hashText] = stored.split("$");
+  const iterations = Number(iterationsText);
+  if (kind !== "pbkdf2-sha256" || !Number.isInteger(iterations) || iterations < 200000 || iterations > 1000000 || !saltText || !hashText) return false;
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveBits"]);
+  const bits = new Uint8Array(await crypto.subtle.deriveBits({ name: "PBKDF2", salt: unb64(saltText), iterations, hash: "SHA-256" }, key, 256));
+  const expected = unb64(hashText);
+  if (bits.length !== expected.length) return false;
+  let diff = 0; for (let i = 0; i < bits.length; i++) diff |= bits[i] ^ expected[i];
+  return diff === 0;
+}
+function validUuid(v: unknown) { return typeof v === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v); }
+
+const url = Deno.env.get("SUPABASE_URL") ?? "";
+const secretMap = Deno.env.get("SUPABASE_SECRET_KEYS");
+const secretKey = secretMap ? JSON.parse(secretMap).default : (Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "");
+const admin = createClient(url, secretKey, { auth: { autoRefreshToken: false, persistSession: false } });
+
+async function ownerContext(req: Request, businessId: string) {
+  const token = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");
+  if (!token) throw new Error("Sesi Owner diperlukan.");
+  const { data: { user }, error: authError } = await admin.auth.getUser(token);
+  if (authError || !user) throw new Error("Sesi login tidak valid.");
+  const { data: member, error } = await admin.from("business_members").select("business_id,role,is_active")
+    .eq("business_id", businessId).eq("user_id", user.id).eq("is_active", true).maybeSingle();
+  if (error || !member || !["owner", "admin"].includes(member.role)) throw new Error("Hanya Owner/Admin aktif yang dapat melakukan tindakan ini.");
+  return { user, member };
+}
+
+async function deviceBranchIsActive(businessId: string, branchId: string) {
+  const { data: branch, error } = await admin.from("branches").select("id")
+    .eq("id", branchId).eq("business_id", businessId).eq("is_active", true).maybeSingle();
+  if (error) throw error;
+  return Boolean(branch);
+}
+
+Deno.serve(async (req: Request) => {
+  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  if (req.method !== "POST") return json({ error: "Method tidak didukung." }, 405);
+  try {
+    if (!url || !secretKey) return json({ error: "Konfigurasi rahasia Edge Function belum tersedia." }, 500);
+    const body = await req.json();
+    const action = String(body.action ?? "");
+
+    if (action === "pair_device") {
+      const { business_id, branch_id, device_id, device_label } = body;
+      if (!validUuid(business_id) || !validUuid(branch_id) || !validUuid(device_id)) return json({ error: "Identitas bisnis, cabang, atau perangkat tidak valid." }, 400);
+      const { user } = await ownerContext(req, business_id);
+      const { data: branch } = await admin.from("branches").select("id").eq("id", branch_id).eq("business_id", business_id).eq("is_active", true).maybeSingle();
+      if (!branch) return json({ error: "Cabang tidak ditemukan atau tidak aktif." }, 404);
+      const { data: existing } = await admin.from("staff_devices").select("device_id,business_id").eq("device_id", device_id).maybeSingle();
+      if (existing && existing.business_id !== business_id) return json({ error: "Perangkat sudah terhubung ke bisnis lain." }, 409);
+      const { error } = await admin.from("staff_devices").upsert({ device_id, business_id, branch_id, device_label: String(device_label ?? "Perangkat kasir").slice(0, 80), approved_by: user.id, approved_at: new Date().toISOString(), revoked_at: null }, { onConflict: "device_id" });
+      if (error) throw error;
+      await admin.from("staff_pin_audit").insert({ business_id, device_id, event_type: "device_paired", details: { branch_id } });
+      return json({ ok: true, message: "Perangkat berhasil dipasangkan." });
+    }
+
+    if (action === "create_staff" || action === "set_pin") {
+      const { business_id, branch_id, staff_profile_id, employee_code, full_name, phone, job_title, pin, role, commission_type, commission_value } = body;
+      if (!validUuid(business_id)) return json({ error: "Business ID tidak valid." }, 400);
+      const { user } = await ownerContext(req, business_id);
+      if (!/^\d{6}$/.test(String(pin ?? ""))) return json({ error: "PIN harus terdiri dari 6 angka." }, 400);
+      if (action === "set_pin") {
+        if (!validUuid(staff_profile_id)) return json({ error: "Profil karyawan tidak valid." }, 400);
+        const { data: profile } = await admin.from("staff_profiles").select("id,business_id").eq("id", staff_profile_id).eq("business_id", business_id).maybeSingle();
+        if (!profile) return json({ error: "Profil karyawan tidak ditemukan." }, 404);
+        const pin_hash = await hashPin(String(pin));
+        const { error } = await admin.from("staff_pin_credentials").upsert({ staff_profile_id, business_id, pin_hash, failed_attempts: 0, locked_until: null, updated_at: new Date().toISOString() }, { onConflict: "staff_profile_id" });
+        if (error) throw error;
+        await admin.from("staff_pin_audit").insert({ business_id, staff_profile_id, event_type: "pin_changed", details: { changed_by: user.id } });
+        return json({ ok: true, message: "PIN karyawan berhasil diperbarui." });
+      }
+      if (!validUuid(branch_id) || !/^[A-Z0-9_-]{2,32}$/.test(String(employee_code ?? "").trim().toUpperCase()) || String(full_name ?? "").trim().length < 2) return json({ error: "Nama, kode karyawan, atau cabang belum valid." }, 400);
+      if (!["cashier", "staff", "manager"].includes(String(role ?? "cashier"))) return json({ error: "Peran karyawan tidak valid." }, 400);
+      const { data: branch } = await admin.from("branches").select("id").eq("id", branch_id).eq("business_id", business_id).eq("is_active", true).maybeSingle();
+      if (!branch) return json({ error: "Cabang tidak ditemukan atau tidak aktif." }, 404);
+
+      const userId = crypto.randomUUID();
+      const syntheticEmail = "staff+" + userId + "@jatibarang-helmet.com";
+      const generatedPassword = crypto.randomUUID() + "-" + crypto.randomUUID() + "-Aa9!";
+      const pin_hash = await hashPin(String(pin));
+      const { data: created, error: createError } = await admin.auth.admin.createUser({ id: userId, email: syntheticEmail, password: generatedPassword, email_confirm: true, user_metadata: { display_name: String(full_name).trim().slice(0, 120), account_type: "staff" } });
+      if (createError || !created.user) throw createError ?? new Error("Gagal membuat akun karyawan.");
+
+      const { data: staffProfileId, error: provisionError } = await admin.rpc("create_staff_records_from_edge", {
+        p_business_id: business_id,
+        p_branch_id: branch_id,
+        p_user_id: created.user.id,
+        p_employee_code: String(employee_code).trim().toUpperCase(),
+        p_full_name: String(full_name).trim().slice(0, 120),
+        p_phone: phone ? String(phone).slice(0, 30) : null,
+        p_job_title: job_title ? String(job_title).slice(0, 80) : null,
+        p_role: String(role ?? "cashier"),
+        p_commission_type: ["percent", "per_unit", "none"].includes(String(commission_type)) ? String(commission_type) : "none",
+        p_commission_value: Math.max(0, Number(commission_value) || 0),
+        p_pin_hash,
+        p_created_by: user.id,
+      });
+
+      if (provisionError || !staffProfileId) {
+        // The RPC may have committed even if its response was interrupted.
+        // Check the unique user/business pair before deleting the Auth user.
+        const { data: committedProfile, error: verifyError } = await admin
+          .from("staff_profiles")
+          .select("id")
+          .eq("business_id", business_id)
+          .eq("user_id", created.user.id)
+          .maybeSingle();
+
+        if (verifyError) {
+          console.error("staff provisioning outcome unknown", { user_id: created.user.id, error: verifyError.message });
+          return json({ error: "Status penyimpanan karyawan belum dapat dipastikan. Periksa daftar karyawan sebelum mengulang." }, 503);
+        }
+
+        if (committedProfile) {
+          return json({
+            ok: true,
+            staff_profile_id: committedProfile.id,
+            user_id: created.user.id,
+            employee_code: String(employee_code).trim().toUpperCase(),
+            message: "Akun karyawan dan PIN berhasil dibuat.",
+          });
+        }
+
+        const { error: cleanupError } = await admin.auth.admin.deleteUser(created.user.id);
+        if (cleanupError) {
+          console.error("staff provisioning Auth cleanup failed", { user_id: created.user.id, error: cleanupError.message });
+          return json({ error: "Penyimpanan data karyawan gagal dan akun Auth sementara belum dapat dibersihkan otomatis." }, 500);
+        }
+
+        throw provisionError ?? new Error("Gagal menyimpan data karyawan.");
+      }
+
+      return json({
+        ok: true,
+        staff_profile_id: staffProfileId,
+        user_id: created.user.id,
+        employee_code: String(employee_code).trim().toUpperCase(),
+        message: "Akun karyawan dan PIN berhasil dibuat.",
+      });
+    }
+
+    if (action === "list_staff") {
+      const { business_id, device_id } = body;
+      if (!validUuid(business_id) || !validUuid(device_id)) return json({ error: "Perangkat belum dikenali." }, 400);
+      const { data: device } = await admin.from("staff_devices").select("device_id,business_id,branch_id").eq("device_id", device_id).eq("business_id", business_id).is("revoked_at", null).maybeSingle();
+      if (!device) return json({ error: "Perangkat belum disetujui Owner." }, 403);
+      if (!(await deviceBranchIsActive(business_id, device.branch_id))) {
+        return json({ error: "Cabang perangkat sudah tidak aktif atau tidak tersedia." }, 403);
+      }
+      const { data: activeMembers, error: memberError } = await admin.from("business_members").select("user_id").eq("business_id", business_id).eq("branch_id", device.branch_id).eq("is_active", true);
+      if (memberError) throw memberError;
+      const activeIds = (activeMembers ?? []).map((m: {user_id:string}) => m.user_id);
+      if (!activeIds.length) return json({ ok: true, staff: [], branch_id: device.branch_id });
+      const { data, error } = await admin.from("staff_profiles").select("id,employee_code,full_name,job_title,branch_id").eq("business_id", business_id).eq("branch_id", device.branch_id).in("user_id", activeIds).order("full_name");
+      if (error) throw error;
+      return json({ ok: true, staff: data ?? [], branch_id: device.branch_id });
+    }
+
+    if (action === "staff_login") {
+      const { business_id, device_id, employee_code, pin } = body;
+      if (!validUuid(business_id) || !validUuid(device_id)) return json({ error: "Perangkat ini belum dapat digunakan." }, 400);
+
+      const { data: device, error: deviceError } = await admin.from("staff_devices")
+        .select("device_id,business_id,branch_id")
+        .eq("device_id", device_id)
+        .eq("business_id", business_id)
+        .is("revoked_at", null)
+        .maybeSingle();
+      if (deviceError) throw deviceError;
+      if (!device) return json({ error: "Perangkat ini belum disetujui Owner." }, 403);
+      if (!(await deviceBranchIsActive(business_id, device.branch_id))) {
+        return json({ error: "Cabang perangkat sudah tidak aktif atau tidak tersedia." }, 403);
+      }
+
+      const { data: deviceLimit, error: deviceLimitError } = await admin.from("staff_device_pin_limits")
+        .select("failed_attempts,locked_until")
+        .eq("business_id", business_id)
+        .eq("device_id", device_id)
+        .maybeSingle();
+      if (deviceLimitError) throw deviceLimitError;
+      if (deviceLimit?.locked_until && new Date(deviceLimit.locked_until).getTime() > Date.now()) {
+        return json({ error: "Terlalu banyak percobaan PIN pada perangkat ini. Tunggu 15 menit sebelum mencoba kembali." }, 429);
+      }
+
+      const code = String(employee_code ?? "").trim().toUpperCase().slice(0, 32);
+      const pinValue = String(pin ?? "");
+      const recordDeviceFailure = async (staffProfileId: string | null = null) => {
+        const { data, error } = await admin.rpc("record_staff_device_pin_attempt", {
+          p_business_id: business_id,
+          p_device_id: device_id,
+          p_success: false,
+        });
+        if (error) throw error;
+        const { error: auditError } = await admin.from("staff_pin_audit").insert({
+          business_id,
+          staff_profile_id: staffProfileId,
+          device_id,
+          event_type: "login_failed",
+          details: { employee_code: code, branch_id: device.branch_id },
+        });
+        if (auditError) throw auditError;
+        return data?.[0]?.locked_until ?? null;
+      };
+
+      if (!/^[A-Z0-9_-]{2,32}$/.test(code) || !/^[0-9]{6}$/.test(pinValue)) {
+        const deviceLockedUntil = await recordDeviceFailure(null);
+        return json(
+          { error: deviceLockedUntil ? "Terlalu banyak percobaan. Perangkat dikunci selama 15 menit." : "Kode karyawan atau PIN salah." },
+          deviceLockedUntil ? 429 : 401,
+        );
+      }
+
+      const { data: profile, error: profileError } = await admin.from("staff_profiles")
+        .select("id,user_id,business_id,branch_id,employee_code,full_name")
+        .eq("business_id", business_id)
+        .eq("branch_id", device.branch_id)
+        .eq("employee_code", code)
+        .maybeSingle();
+      if (profileError) throw profileError;
+      if (!profile) {
+        const deviceLockedUntil = await recordDeviceFailure(null);
+        return json(
+          { error: deviceLockedUntil ? "Terlalu banyak percobaan. Perangkat dikunci selama 15 menit." : "Kode karyawan atau PIN salah." },
+          deviceLockedUntil ? 429 : 401,
+        );
+      }
+
+      const { data: member, error: memberError } = await admin.from("business_members")
+        .select("user_id,branch_id,is_active")
+        .eq("business_id", business_id)
+        .eq("user_id", profile.user_id)
+        .eq("branch_id", device.branch_id)
+        .eq("is_active", true)
+        .maybeSingle();
+      if (memberError) throw memberError;
+      if (!member) {
+        const deviceLockedUntil = await recordDeviceFailure(profile.id);
+        return json(
+          { error: deviceLockedUntil ? "Terlalu banyak percobaan. Perangkat dikunci selama 15 menit." : "Kode karyawan atau PIN salah." },
+          deviceLockedUntil ? 429 : 401,
+        );
+      }
+
+      const { data: credential, error: credentialError } = await admin.from("staff_pin_credentials")
+        .select("pin_hash,failed_attempts,locked_until")
+        .eq("staff_profile_id", profile.id)
+        .maybeSingle();
+      if (credentialError) throw credentialError;
+      if (!credential) {
+        const deviceLockedUntil = await recordDeviceFailure(profile.id);
+        return json(
+          { error: deviceLockedUntil ? "Terlalu banyak percobaan. Perangkat dikunci selama 15 menit." : "Kode karyawan atau PIN salah." },
+          deviceLockedUntil ? 429 : 401,
+        );
+      }
+
+      if (credential.locked_until && new Date(credential.locked_until).getTime() > Date.now()) {
+        await recordDeviceFailure(profile.id);
+        return json({ error: "PIN karyawan terkunci sementara. Tunggu 10 menit sebelum mencoba kembali." }, 429);
+      }
+      if (credential.locked_until && new Date(credential.locked_until).getTime() <= Date.now()) {
+        const { error: resetError } = await admin.rpc("reset_staff_pin_failures", { p_staff_profile_id: profile.id });
+        if (resetError) throw resetError;
+      }
+
+      if (!(await verifyPin(pinValue, credential.pin_hash))) {
+        const [{ data: userFailures, error: userFailureError }, deviceLockedUntil] = await Promise.all([
+          admin.rpc("record_staff_pin_failure", { p_staff_profile_id: profile.id }),
+          recordDeviceFailure(profile.id),
+        ]);
+        if (userFailureError) throw userFailureError;
+        const userLockedUntil = userFailures?.[0]?.locked_until ?? null;
+        const locked = Boolean(userLockedUntil || deviceLockedUntil);
+        return json(
+          { error: locked ? "Terlalu banyak percobaan. Akses PIN dikunci sementara." : "Kode karyawan atau PIN salah." },
+          locked ? 429 : 401,
+        );
+      }
+
+      const [userReset, deviceReset] = await Promise.all([
+        admin.rpc("reset_staff_pin_failures", { p_staff_profile_id: profile.id }),
+        admin.rpc("record_staff_device_pin_attempt", {
+          p_business_id: business_id,
+          p_device_id: device_id,
+          p_success: true,
+        }),
+      ]);
+      if (userReset.error) throw userReset.error;
+      if (deviceReset.error) throw deviceReset.error;
+
+      const { data: authUser, error: getUserError } = await admin.auth.admin.getUserById(profile.user_id);
+      if (getUserError || !authUser.user?.email) throw getUserError ?? new Error("Akun karyawan tidak tersedia.");
+      const { data: linkData, error: linkError } = await admin.auth.admin.generateLink({ type: "magiclink", email: authUser.user.email });
+      if (linkError || !linkData.properties?.hashed_token) throw linkError ?? new Error("Gagal membuat sesi login.");
+      const { error: auditError } = await admin.from("staff_pin_audit").insert({
+        business_id,
+        staff_profile_id: profile.id,
+        device_id,
+        event_type: "login_success",
+        details: { branch_id: device.branch_id },
+      });
+      if (auditError) throw auditError;
+      return json({
+        ok: true,
+        token_hash: linkData.properties.hashed_token,
+        type: "magiclink",
+        staff: {
+          id: profile.id,
+          user_id: profile.user_id,
+          name: profile.full_name,
+          employee_code: profile.employee_code,
+          branch_id: profile.branch_id,
+        },
+      });
+    }
+    if (action === "revoke_device") {
+      const { business_id, device_id } = body;
+      if (!validUuid(business_id) || !validUuid(device_id)) return json({ error: "Data perangkat tidak valid." }, 400);
+      const { user } = await ownerContext(req, business_id);
+      const { error } = await admin.from("staff_devices").update({ revoked_at: new Date().toISOString() }).eq("business_id", business_id).eq("device_id", device_id);
+      if (error) throw error;
+      await admin.from("staff_pin_audit").insert({ business_id, device_id, event_type: "device_revoked", details: { revoked_by: user.id } });
+      return json({ ok: true, message: "Akses perangkat dicabut." });
+    }
+    return json({ error: "Aksi tidak dikenal." }, 400);
+  } catch (error) {
+    console.error("staff-access error", error);
+    return json({ error: error instanceof Error ? error.message : "Terjadi kesalahan server." }, 400);
+  }
+});
