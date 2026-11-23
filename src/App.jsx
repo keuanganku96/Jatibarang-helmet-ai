@@ -298,7 +298,7 @@ export default function App() {
   }
   async function saveCommissionRule(e){
     e.preventDefault();setBusy(true);setError("");
-    const {error:e2}=await supabase.rpc("save_commission_rule",{p_branch_id:commissionRuleDraft.branch_id||null,p_product_id:commissionRuleDraft.product_id||null,p_commission_type:commissionRuleDraft.commission_type,p_commission_value:Number(commissionRuleDraft.commission_value)||0,p_is_active:true});
+    const {error:e2}=await supabase.rpc("save_commission_rule_for_business",{p_business_id:business.id,p_branch_id:commissionRuleDraft.branch_id||null,p_product_id:commissionRuleDraft.product_id||null,p_commission_type:commissionRuleDraft.commission_type,p_commission_value:Number(commissionRuleDraft.commission_value)||0,p_is_active:true});
     setBusy(false);if(e2){setError(e2.message);return;}
     setNotice("Aturan komisi berhasil disimpan.");setCommissionRuleDraft({branch_id:"",product_id:"",commission_type:"percent",commission_value:"0"});await loadData();
   }
@@ -861,7 +861,7 @@ export default function App() {
       }
       if(["owner","admin"].includes(membership?.role)&&savedProductId){
         const existingRule=commissionRules.filter(r=>r.product_id===savedProductId).sort((a,b)=>Number(b.branch_id===branchId)-Number(a.branch_id===branchId))[0];
-        const {error:commissionError}=await supabase.rpc("save_commission_rule",{
+        const {error:commissionError}=await supabase.rpc("save_commission_rule_for_business",{p_business_id:business.id,
           p_branch_id:existingRule?.branch_id??null,p_product_id:savedProductId,
           p_commission_type:productForm.commission_type==="inherit"?"none":productForm.commission_type,
           p_commission_value:Number(productForm.commission_value)||0,p_is_active:productForm.commission_type!=="inherit"
