@@ -437,7 +437,7 @@ export default function App() {
   }
 
   async function login(email,password){return await supabase.auth.signInWithPassword({email,password});}
-  async function logout(){await supabase.auth.signOut();setBusiness(null);setProducts([]);setCustomers([]);setSales([]);setCart([]);}
+  async function logout(){await supabase.auth.signOut();setBusiness(null);setBusinessChoices([]);setMembership(null);setProducts([]);setCustomers([]);setSales([]);setCart([]);}
 
   const productStockCounts = useMemo(()=>({all:products.length,low:products.filter(p=>Number(p.stock)>0&&Number(p.stock)<=Number(p.min||0)).length,out:products.filter(p=>Number(p.stock)<=0).length}),[products]);
   const posProducts = useMemo(()=>products.filter(p=>p.variant_parent_id||!products.some(child=>child.variant_parent_id===p.id)),[products]);
@@ -1076,7 +1076,7 @@ export default function App() {
   if(!supabaseConfigured)return <main className="auth-screen"><div className="auth-card"><h1>SMART POS JATIBARANG</h1><p>Koneksi Supabase belum dikonfigurasi pada deployment ini. Periksa Vercel Environment Variables lalu deploy ulang.</p></div></main>;
   if(authLoading)return <main className="auth-screen"><div className="auth-card">Memeriksa sesi akun...</div></main>;
   if(!session)return <Login onLogin={login}/>;
-  if(session && !business && businessChoices.length>1) return <main className="auth-screen"><section className="auth-card"><div className="brand-mark auth-mark">SJ</div><span className="eyebrow">PEMILIHAN BISNIS</span><h1>Pilih bisnis</h1><p>Akun ini memiliki akses ke beberapa bisnis. Pilih bisnis yang akan dibuka. Data dan hak akses akan dimuat ulang sesuai keanggotaan aktif.</p>{error&&<div className="notice error-notice">{error}</div>}<div style={{display:"grid",gap:10,marginTop:16}}>{businessChoices.map(option=><button key={option.id} className="secondary full" type="button" disabled={busy} onClick={()=>loadData(option.id)}>{busy?"Memuat...":option.name}</button>)}</div><button className="text-btn" type="button" style={{marginTop:16}} onClick={()=>supabase.auth.signOut()}>Keluar akun</button></section></main>;
+  if(session && !business && businessChoices.length>1) return <main className="auth-screen"><section className="auth-card"><div className="brand-mark auth-mark">SJ</div><span className="eyebrow">PEMILIHAN BISNIS</span><h1>Pilih bisnis</h1><p>Akun ini memiliki akses ke beberapa bisnis. Pilih bisnis yang akan dibuka. Data dan hak akses akan dimuat ulang sesuai keanggotaan aktif.</p>{error&&<div className="notice error-notice">{error}</div>}<div style={{display:"grid",gap:10,marginTop:16}}>{businessChoices.map(option=><button key={option.id} className="secondary full" type="button" disabled={busy} onClick={()=>loadData(option.id)}>{busy?"Memuat...":option.name}</button>)}</div><button className="text-btn" type="button" style={{marginTop:16}} onClick={logout}>Keluar akun</button></section></main>;
 
   return <div className="app-shell">
     <aside className="sidebar"><div className="brand"><div className="brand-mark">SJ</div><div><b>SMART POS</b><small>JATIBARANG HELMET</small></div></div>
