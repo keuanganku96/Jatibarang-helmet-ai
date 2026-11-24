@@ -7,6 +7,32 @@ const BUSINESS_ID = "8552ecbe-a62e-41b9-b274-b855f6b5e37b";
 const NAV = [["Dashboard","▦"],["Kasir","▣"],["Piutang Pelanggan","Rp"],["Retur Penjualan","↩"],["Produk & Stok","▤"],["Stok Opname","▧"],["Transfer Stok","⇄"],["Pembelian","⇧"],["Retur Pembelian","↩"],["Pemasok","♧"],["Pelanggan","♙"],["Loyalty Point","★"],["Garansi","✓"],["Laporan","▥"],["Keuangan","Rp"],["Karyawan & Shift","♙"],["Pengaturan","⚙"]];
 
 function getStaffDeviceId(){let id=localStorage.getItem("smartpos_device_id");if(!id){id=crypto.randomUUID();localStorage.setItem("smartpos_device_id",id);}return id;}
+
+// localStorage is only a remembered selection, never an authorization source.
+// The active business is always revalidated against Supabase membership.
+function resolveBusinessMembership(members, requestedBusinessId, storedBusinessId) {
+  const activeMembers = (Array.isArray(members) ? members : [])
+    .filter(member => member && member.is_active === true && typeof member.business_id === "string");
+  const businessIds = [...new Set(activeMembers.map(member => member.business_id))];
+  const requestedId = requestedBusinessId || null;
+
+  if (requestedId && !businessIds.includes(requestedId)) {
+    return { status: "forbidden", businessIds };
+  }
+
+  const selectedId = requestedId
+    || (storedBusinessId && businessIds.includes(storedBusinessId) ? storedBusinessId : null)
+    || (businessIds.length === 1 ? businessIds[0] : null);
+
+  if (!selectedId) {
+    return { status: businessIds.length > 1 ? "choose" : "none", businessIds };
+  }
+
+  const membership = activeMembers.find(member => member.business_id === selectedId);
+  return membership
+    ? { status: "selected", businessId: selectedId, membership, businessIds }
+    : { status: "none", businessIds };
+}
 function Login({onLogin}){
  const [email,setEmail]=useState(""),[password,setPassword]=useState(""),[busy,setBusy]=useState(false),[error,setError]=useState("");
  const [staffBusy,setStaffBusy]=useState(false),[staffError,setStaffError]=useState(""),[staffList,setStaffList]=useState([]),[staffCode,setStaffCode]=useState(""),[pin,setPin]=useState("");
@@ -46,6 +72,7 @@ export default function App() {
   const [notice,setNotice] = useState("");
   const [error,setError] = useState("");
   const [business,setBusiness] = useState(null);
+  const [businessChoices,setBusinessChoices] = useState([]);
   const [membership,setMembership] = useState(null);
   const [membershipTiers,setMembershipTiers] = useState([]);
   const [loyaltyProgram,setLoyaltyProgram] = useState(null);
@@ -160,15 +187,41 @@ export default function App() {
     return ()=>{alive=false;subscription.unsubscribe();};
   },[]);
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (requestedBusinessId) => {
     if (!session?.user?.id || !supabase) return;
     setBusy(true); setError("");
     try {
-      const {data:member,error:memberError} = await supabase.from("business_members")
-        .select("business_id,role,branch_id").eq("user_id",session.user.id).eq("is_active",true).limit(1).maybeSingle();
-      if(memberError) throw memberError;
-      if(!member) throw new Error("Akun ini belum terdaftar sebagai anggota bisnis. Hubungi Owner.");
-      const businessId = member.business_id;
+      const {data:members,error:membersError} = await supabase.from("business_members")
+        .select("business_id,role,branch_id,is_active,created_at")
+        .eq("user_id",session.user.id).eq("is_active",true).order("created_at");
+      if(membersError) throw membersError;
+
+      const storedBusinessId = localStorage.getItem("smartpos_business_id") || "";
+      const resolution = resolveBusinessMembership(members, requestedBusinessId, storedBusinessId);
+      if(resolution.status === "forbidden") {
+        throw new Error("Akun ini tidak memiliki keanggotaan aktif pada bisnis yang dipilih.");
+      }
+      if(resolution.status === "none") {
+        throw new Error("Akun ini belum terdaftar sebagai anggota bisnis aktif. Hubungi Owner.");
+      }
+
+      const {data:businessRows,error:businessRowsError} = await supabase.from("businesses")
+        .select("id,name").in("id",resolution.businessIds).order("name");
+      if(businessRowsError) throw businessRowsError;
+      if((businessRows||[]).length !== resolution.businessIds.length) {
+        throw new Error("Daftar bisnis tidak lengkap. Akses tidak dilanjutkan demi keamanan.");
+      }
+      setBusinessChoices(businessRows||[]);
+
+      if(resolution.status === "choose") {
+        setBusiness(null);
+        setMembership(null);
+        return;
+      }
+
+      const member = resolution.membership;
+      const businessId = resolution.businessId;
+      const preserveCurrentLocation = storedBusinessId === businessId;
       localStorage.setItem("smartpos_business_id", businessId);
       const [bizRes,branchRes,warehouseRes,productRes,inventoryRes,categoryRes,customerRes,salesRes,suppliersRes,purchasesRes,paymentsRes,cashRes,tiersRes,warrantiesRes,claimsRes,attendanceRes,shiftRes,opnameRes,transferRes,returnsRes,loyaltyProgramRes,loyaltyLedgerRes,supplierReturnsRes] = await Promise.all([
         supabase.from("businesses").select("id,name,currency,timezone").eq("id",businessId).single(),
@@ -216,11 +269,11 @@ export default function App() {
       const accessibleBranches = ["owner","admin"].includes(member.role)
         ? branchRes.data
         : branchRes.data.filter(b=>b.id===member.branch_id);
-      const activeBranch = accessibleBranches.find(b=>b.id===branchId)
+      const activeBranch = accessibleBranches.find(b=>preserveCurrentLocation && b.id===branchId)
         || accessibleBranches.find(b=>b.id===member.branch_id)
         || accessibleBranches[0];
       const branchWarehouses = warehouseRes.data.filter(w=>w.branch_id===activeBranch?.id);
-      const activeWarehouse = branchWarehouses.find(w=>w.id===warehouseId) || branchWarehouses[0];
+      const activeWarehouse = branchWarehouses.find(w=>preserveCurrentLocation && w.id===warehouseId) || branchWarehouses[0];
       const categoryMap = Object.fromEntries(categoryRes.data.map(c=>[c.id,c.name]));
       // Show stock for the selected operating warehouse only; never combine stock
       // from separate branches/warehouses into one sellable quantity.
@@ -243,6 +296,18 @@ export default function App() {
 
   useEffect(()=>{ if(session) loadData(); },[session,loadData]);
 
+  function switchBusiness(nextBusinessId) {
+    if(!nextBusinessId || nextBusinessId===business?.id) return;
+    if(!businessChoices.some(option=>option.id===nextBusinessId)) {
+      setError("Bisnis yang dipilih tidak tersedia pada keanggotaan akun ini.");
+      return;
+    }
+    setNotice("");
+    setError("");
+    setBusiness(null);
+    setMembership(null);
+    loadData(nextBusinessId);
+  }
 
 
 
@@ -1011,6 +1076,7 @@ export default function App() {
   if(!supabaseConfigured)return <main className="auth-screen"><div className="auth-card"><h1>SMART POS JATIBARANG</h1><p>Koneksi Supabase belum dikonfigurasi pada deployment ini. Periksa Vercel Environment Variables lalu deploy ulang.</p></div></main>;
   if(authLoading)return <main className="auth-screen"><div className="auth-card">Memeriksa sesi akun...</div></main>;
   if(!session)return <Login onLogin={login}/>;
+  if(session && !business && businessChoices.length>1) return <main className="auth-screen"><section className="auth-card"><div className="brand-mark auth-mark">SJ</div><span className="eyebrow">PEMILIHAN BISNIS</span><h1>Pilih bisnis</h1><p>Akun ini memiliki akses ke beberapa bisnis. Pilih bisnis yang akan dibuka. Data dan hak akses akan dimuat ulang sesuai keanggotaan aktif.</p>{error&&<div className="notice error-notice">{error}</div>}<div style={{display:"grid",gap:10,marginTop:16}}>{businessChoices.map(option=><button key={option.id} className="secondary full" type="button" disabled={busy} onClick={()=>loadData(option.id)}>{busy?"Memuat...":option.name}</button>)}</div><button className="text-btn" type="button" style={{marginTop:16}} onClick={()=>supabase.auth.signOut()}>Keluar akun</button></section></main>;
 
   return <div className="app-shell">
     <aside className="sidebar"><div className="brand"><div className="brand-mark">SJ</div><div><b>SMART POS</b><small>JATIBARANG HELMET</small></div></div>
@@ -1020,6 +1086,7 @@ export default function App() {
     <main className="main-area">
       <header className="topbar"><div><b>{page}</b><small>{business?.name||"Jatibarang Helmet"} · {branches.find(b=>b.id===branchId)?.name||"Cabang"}</small></div>
         <div className="top-right"><div className="location-controls">
+          {businessChoices.length>1&&<label><span>Bisnis</span><select aria-label="Pilih bisnis" value={business?.id||""} onChange={e=>switchBusiness(e.target.value)}>{businessChoices.map(option=><option key={option.id} value={option.id}>{option.name}</option>)}</select></label>}
           {branches.length>1&&<label><span>Cabang</span><select aria-label="Pilih cabang" value={branchId} onChange={e=>{setBranchId(e.target.value);setWarehouseId("");}}>{branches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></label>}
           {warehouses.filter(w=>w.branch_id===branchId).length>1&&<label><span>Gudang</span><select aria-label="Pilih gudang" value={warehouseId} onChange={e=>setWarehouseId(e.target.value)}>{warehouses.filter(w=>w.branch_id===branchId).map(w=><option key={w.id} value={w.id}>{w.name}</option>)}</select></label>}
         </div><span className="online"><i/> Sinkronisasi cloud</span><div className="avatar">{(session.user.email||"JH").slice(0,2).toUpperCase()}</div><button className="secondary" onClick={logout}>Keluar</button></div>
