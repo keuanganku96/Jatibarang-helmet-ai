@@ -158,6 +158,7 @@ export default function App() {
   const [paymentNotes,setPaymentNotes] = useState("");
   const [selectedReceivableId,setSelectedReceivableId] = useState("");
   const [receivablePaymentDraft,setReceivablePaymentDraft] = useState({payment_method:"Tunai",amount:"",payment_reference:""});
+  const receivablePaymentRequestIdsRef = useRef({});
   const [customerId,setCustomerId] = useState("");
   const [showProductForm,setShowProductForm] = useState(false);
   const [showVariantForm,setShowVariantForm] = useState(false);
@@ -801,10 +802,37 @@ export default function App() {
     const amount=Number(receivablePaymentDraft.amount);
     if(!amount||amount<=0){setError("Masukkan nominal pembayaran yang valid.");return;}
     if(amount>sale.balanceDue){setError("Pembayaran melebihi sisa piutang.");return;}
+
+    // Persist only the request token (never payment data) so a retry after a
+    // network timeout reuses the same server-side idempotency key.
+    const requestStorageKey="smartpos_receivable_payment_request:"+sale.id;
+    let requestId=receivablePaymentRequestIdsRef.current[sale.id]||"";
+    try{requestId=localStorage.getItem(requestStorageKey)||requestId;}catch{}
+    if(!requestId)requestId=crypto.randomUUID();
+    receivablePaymentRequestIdsRef.current[sale.id]=requestId;
+    try{localStorage.setItem(requestStorageKey,requestId);}catch{}
+
     setBusy(true);setError("");
-    const {data,error:e2}=await supabase.rpc("record_sale_payment",{p_sale_id:sale.id,p_payment_method:receivablePaymentDraft.payment_method,p_amount:amount,p_payment_reference:receivablePaymentDraft.payment_reference||null});
+    const {data,error:e2}=await supabase.rpc("record_sale_payment",{
+      p_sale_id:sale.id,
+      p_payment_method:receivablePaymentDraft.payment_method,
+      p_amount:amount,
+      p_payment_reference:receivablePaymentDraft.payment_reference||null,
+      p_idempotency_key:requestId
+    });
     setBusy(false);
-    if(e2){setError(e2.message);return;}
+    if(e2){
+      // Keep the key only for ambiguous transport failures. A definite server
+      // response lets the cashier correct the draft and start a new request.
+      if(e2.code){
+        delete receivablePaymentRequestIdsRef.current[sale.id];
+        try{localStorage.removeItem(requestStorageKey);}catch{}
+      }
+      setError(e2.message+(e2.code?"":" Jika koneksi terputus, ulangi dengan data yang sama agar pembayaran tidak tercatat ganda."));
+      return;
+    }
+    delete receivablePaymentRequestIdsRef.current[sale.id];
+    try{localStorage.removeItem(requestStorageKey);}catch{}
     const result=data?.[0];
     setNotice("Pembayaran invoice "+sale.invoice_no+" berhasil. Sisa piutang "+money(result?.balance_due||0)+".");
     setReceivablePaymentDraft({payment_method:"Tunai",amount:"",payment_reference:""});setSelectedReceivableId("");await loadData();
