@@ -159,6 +159,7 @@ export default function App() {
   const [selectedReceivableId,setSelectedReceivableId] = useState("");
   const [receivablePaymentDraft,setReceivablePaymentDraft] = useState({payment_method:"Tunai",amount:"",payment_reference:""});
   const receivablePaymentRequestIdsRef = useRef({});
+  const supplierPaymentRequestIdsRef = useRef({});
   const [customerId,setCustomerId] = useState("");
   const [showProductForm,setShowProductForm] = useState(false);
   const [showVariantForm,setShowVariantForm] = useState(false);
@@ -1082,13 +1083,34 @@ export default function App() {
     const draft=paymentDrafts[purchase.id]||{};
     const amount=Number(draft.amount)||0;
     if(amount<=0){setError("Masukkan nominal pembayaran lebih dari nol.");return;}
+
+    // Persist only the request token so an ambiguous network retry reuses the
+    // same server-side idempotency key; payment details remain in the form.
+    const requestStorageKey="smartpos_supplier_payment_request:"+(business?.id||"unknown")+":"+purchase.id;
+    let requestId=supplierPaymentRequestIdsRef.current[purchase.id]||"";
+    try{requestId=localStorage.getItem(requestStorageKey)||requestId;}catch{}
+    if(!requestId)requestId=crypto.randomUUID();
+    supplierPaymentRequestIdsRef.current[purchase.id]=requestId;
+    try{localStorage.setItem(requestStorageKey,requestId);}catch{}
+
     setBusy(true);setError("");
     const {data,error:payError}=await supabase.rpc("record_supplier_payment",{
       p_purchase_id:purchase.id,p_amount:amount,p_payment_method:draft.method||"Tunai",
-      p_reference_no:draft.reference||null,p_notes:draft.notes||null
+      p_reference_no:draft.reference||null,p_notes:draft.notes||null,p_idempotency_key:requestId
     });
     setBusy(false);
-    if(payError){setError(payError.message);return;}
+    if(payError){
+      // Keep the key only for ambiguous transport failures. A definitive
+      // database response lets the user correct the draft and start a new request.
+      if(payError.code){
+        delete supplierPaymentRequestIdsRef.current[purchase.id];
+        try{localStorage.removeItem(requestStorageKey);}catch{}
+      }
+      setError(payError.message+(payError.code?"":" Jika koneksi terputus, ulangi pembayaran dengan data yang sama agar tidak tercatat ganda."));
+      return;
+    }
+    delete supplierPaymentRequestIdsRef.current[purchase.id];
+    try{localStorage.removeItem(requestStorageKey);}catch{}
     setNotice("Pembayaran supplier berhasil dicatat. Sisa hutang "+money(data?.[0]?.remaining_balance||0)+".");
     setPaymentDrafts(old=>({...old,[purchase.id]:undefined}));
     await loadData();
