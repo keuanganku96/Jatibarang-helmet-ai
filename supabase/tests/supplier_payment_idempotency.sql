@@ -143,7 +143,7 @@ BEGIN
     IF SQLERRM = 'TEST_FAILED_KEY_REUSE_WITH_DIFFERENT_AMOUNT_WAS_ACCEPTED' THEN
       RAISE;
     END IF;
-    IF pg_catalog.position('Kunci idempotensi sudah digunakan' IN SQLERRM) = 0 THEN
+    IF pg_catalog.strpos(SQLERRM, 'Kunci idempotensi sudah digunakan') = 0 THEN
       RAISE;
     END IF;
   END;
@@ -159,7 +159,7 @@ BEGIN
     IF SQLERRM = 'TEST_FAILED_KEY_REUSE_ON_DIFFERENT_PURCHASE_WAS_ACCEPTED' THEN
       RAISE;
     END IF;
-    IF pg_catalog.position('Kunci idempotensi sudah digunakan' IN SQLERRM) = 0 THEN
+    IF pg_catalog.strpos(SQLERRM, 'Kunci idempotensi sudah digunakan') = 0 THEN
       RAISE;
     END IF;
   END;
