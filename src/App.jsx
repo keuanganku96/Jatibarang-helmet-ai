@@ -160,6 +160,7 @@ export default function App() {
   const [receivablePaymentDraft,setReceivablePaymentDraft] = useState({payment_method:"Tunai",amount:"",payment_reference:""});
   const receivablePaymentRequestIdsRef = useRef({});
   const supplierPaymentRequestIdsRef = useRef({});
+  const purchaseReceiveRequestIdsRef = useRef({});
   const [customerId,setCustomerId] = useState("");
   const [showProductForm,setShowProductForm] = useState(false);
   const [showVariantForm,setShowVariantForm] = useState(false);
@@ -180,6 +181,7 @@ export default function App() {
   const [supplierForm,setSupplierForm] = useState({name:"",phone:"",email:"",address:""});
   const [purchaseForm,setPurchaseForm] = useState({supplier_id:"",notes:"",product_id:"",quantity:"1",unit_cost:"",supplier_invoice_no:"",due_date:"",initial_payment:"0",payment_method:"Tunai",payment_reference:""});
   const [purchaseCart,setPurchaseCart] = useState([]);
+  const [purchaseRequestConflictKey,setPurchaseRequestConflictKey] = useState("");
 
   useEffect(()=>{
     if (!supabaseConfigured || !supabase) { setAuthLoading(false); return; }
@@ -1063,7 +1065,17 @@ export default function App() {
   }
 
   async function savePurchase(){
-    if(!purchaseCart.length||!warehouseId)return;
+    if(!purchaseCart.length||!warehouseId||!business?.id||!branchId)return;
+
+    // Keep one request UUID until the server gives a definitive response.
+    // This is a retry token only; purchase data remains authoritative in Supabase.
+    const requestStorageKey="smartpos_purchase_receive_request:"+business.id+":"+branchId+":"+warehouseId;
+    let requestId=purchaseReceiveRequestIdsRef.current[requestStorageKey]||"";
+    try{requestId=localStorage.getItem(requestStorageKey)||requestId;}catch{}
+    if(!requestId)requestId=crypto.randomUUID();
+    purchaseReceiveRequestIdsRef.current[requestStorageKey]=requestId;
+    try{localStorage.setItem(requestStorageKey,requestId);}catch{}
+
     setBusy(true);setError("");
     const {data,error:saveError}=await supabase.rpc("receive_purchase",{
       p_business_id:business.id,p_branch_id:branchId,p_warehouse_id:warehouseId,
@@ -1071,9 +1083,29 @@ export default function App() {
       p_items:purchaseCart.map(item=>({product_id:item.product_id,quantity:item.quantity,unit_cost:item.unit_cost})),
       p_notes:purchaseForm.notes||null,p_supplier_invoice_no:purchaseForm.supplier_invoice_no||null,
       p_due_date:purchaseForm.due_date||null,p_initial_payment:Number(purchaseForm.initial_payment)||0,
-      p_payment_method:purchaseForm.payment_method,p_payment_reference:purchaseForm.payment_reference||null
+      p_payment_method:purchaseForm.payment_method,p_payment_reference:purchaseForm.payment_reference||null,
+      p_idempotency_key:requestId
     });
-    setBusy(false);if(saveError){setError(saveError.message);return;}
+    setBusy(false);
+    if(saveError){
+      const isIdempotencyConflict=(saveError.message||"").includes("Kunci idempotensi sudah digunakan");
+      if(isIdempotencyConflict){
+        // Keep the key so another click cannot silently create a second purchase.
+        setPurchaseRequestConflictKey(requestStorageKey);
+      }else if(saveError.code){
+        delete purchaseReceiveRequestIdsRef.current[requestStorageKey];
+        try{localStorage.removeItem(requestStorageKey);}catch{}
+        setPurchaseRequestConflictKey("");
+      }
+      setError(saveError.message+(isIdempotencyConflict
+        ?" Periksa riwayat pembelian terlebih dahulu. Jangan buat permintaan baru sebelum memastikan transaksi sebelumnya."
+        :saveError.code?"":" Jika koneksi terputus, ulangi penerimaan dengan data yang sama agar tidak tercatat ganda."));
+      return;
+    }
+
+    delete purchaseReceiveRequestIdsRef.current[requestStorageKey];
+    try{localStorage.removeItem(requestStorageKey);}catch{}
+    setPurchaseRequestConflictKey("");
     setPurchaseCart([]);setPurchaseForm({supplier_id:"",notes:"",product_id:"",quantity:"1",unit_cost:"",supplier_invoice_no:"",due_date:"",initial_payment:"0",payment_method:"Tunai",payment_reference:""});
     setNotice("Pembelian "+(data?.[0]?.purchase_no||"")+" diterima; stok gudang bertambah.");await loadData();
   }
@@ -1245,7 +1277,7 @@ export default function App() {
         {page==="Pembelian"&&<><div className="welcome"><div><span className="eyebrow">PENGADAAN STOK</span><h1>Pembelian barang</h1><p>Penerimaan barang menambah stok dan mencatat hutang serta pembayaran supplier.</p></div></div>
           <div className="stats">{card("Sisa hutang (100 pembelian terakhir)",money(purchases.filter(p=>p.payable_tracking_enabled).reduce((s,p)=>s+Math.max(0,Number(p.total)-Number(p.amount_paid||0)),0)),"Tagihan yang tercatat pada daftar terbaru","Rp")}{card("Tagihan jatuh tempo",purchases.filter(p=>p.payable_tracking_enabled&&Number(p.total)>Number(p.amount_paid||0)&&p.due_date&&new Date(p.due_date+"T23:59:59")<new Date()).length,"Perlu segera dibayar","!")}{card("Pembayaran (300 terbaru)",money(supplierPayments.reduce((s,p)=>s+Number(p.amount||0),0)),"Riwayat pembayaran pada cabang aktif","✓")}</div>
           <section className="panel purchase-panel"><h3>Catat penerimaan pembelian</h3><div className="form-grid"><label>Pemasok<select value={purchaseForm.supplier_id} onChange={e=>setPurchaseForm({...purchaseForm,supplier_id:e.target.value})}><option value="">Pilih pemasok (opsional)</option>{suppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></label><label>Nomor invoice supplier<input value={purchaseForm.supplier_invoice_no} onChange={e=>setPurchaseForm({...purchaseForm,supplier_invoice_no:e.target.value})} placeholder="Nomor nota supplier"/></label><label>Jatuh tempo<input type="date" min={new Date().toISOString().slice(0,10)} value={purchaseForm.due_date} onChange={e=>setPurchaseForm({...purchaseForm,due_date:e.target.value})}/></label><label>Pembayaran awal (Rp)<input type="number" min="0" value={purchaseForm.initial_payment} onChange={e=>setPurchaseForm({...purchaseForm,initial_payment:e.target.value})}/></label><label>Metode pembayaran<select value={purchaseForm.payment_method} onChange={e=>setPurchaseForm({...purchaseForm,payment_method:e.target.value})}>{["Tunai","Transfer bank","QRIS","Debit"].map(x=><option key={x}>{x}</option>)}</select></label><label>Referensi pembayaran<input value={purchaseForm.payment_reference} onChange={e=>setPurchaseForm({...purchaseForm,payment_reference:e.target.value})} placeholder="Nomor transfer (opsional)"/></label><label>Catatan<input value={purchaseForm.notes} onChange={e=>setPurchaseForm({...purchaseForm,notes:e.target.value})} placeholder="Catatan pembelian"/></label><label>Produk<select value={purchaseForm.product_id} onChange={e=>{const p=products.find(x=>x.id===e.target.value);setPurchaseForm({...purchaseForm,product_id:e.target.value,unit_cost:p?String(p.cost):""});}}><option value="">Pilih produk</option>{products.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label><label>Jumlah<input type="number" min="0.001" step="0.001" value={purchaseForm.quantity} onChange={e=>setPurchaseForm({...purchaseForm,quantity:e.target.value})}/></label><label>Harga modal per unit<input type="number" min="0" value={purchaseForm.unit_cost} onChange={e=>setPurchaseForm({...purchaseForm,unit_cost:e.target.value})}/></label><div className="form-actions"><button type="button" className="secondary" onClick={addPurchaseItem}>＋ Tambahkan barang</button></div></div>
-            {purchaseCart.length>0&&<><div className="table-wrap"><table><thead><tr><th>PRODUK</th><th>JUMLAH</th><th>HARGA MODAL</th><th>SUBTOTAL</th><th></th></tr></thead><tbody>{purchaseCart.map(item=><tr key={item.product_id}><td>{item.name}</td><td>{item.quantity}</td><td>{money(item.unit_cost)}</td><td>{money(item.quantity*item.unit_cost)}</td><td><button className="text-btn" onClick={()=>setPurchaseCart(old=>old.filter(x=>x.product_id!==item.product_id))}>Hapus</button></td></tr>)}</tbody></table></div><div className="total-line"><span>Total pembelian</span><strong>{money(purchaseCart.reduce((a,x)=>a+x.quantity*x.unit_cost,0))}</strong></div><button className="primary" disabled={busy} onClick={savePurchase}>Simpan penerimaan dan tambah stok</button></>}
+            {purchaseCart.length>0&&<><div className="table-wrap"><table><thead><tr><th>PRODUK</th><th>JUMLAH</th><th>HARGA MODAL</th><th>SUBTOTAL</th><th></th></tr></thead><tbody>{purchaseCart.map(item=><tr key={item.product_id}><td>{item.name}</td><td>{item.quantity}</td><td>{money(item.unit_cost)}</td><td>{money(item.quantity*item.unit_cost)}</td><td><button className="text-btn" onClick={()=>setPurchaseCart(old=>old.filter(x=>x.product_id!==item.product_id))}>Hapus</button></td></tr>)}</tbody></table></div><div className="total-line"><span>Total pembelian</span><strong>{money(purchaseCart.reduce((a,x)=>a+x.quantity*x.unit_cost,0))}</strong></div><button className="primary" disabled={busy} onClick={savePurchase}>Simpan penerimaan dan tambah stok</button>{purchaseRequestConflictKey&&<div className="notice error-notice"><p>Permintaan sebelumnya memakai kunci yang sama dengan data berbeda. Periksa riwayat pembelian sebelum melanjutkan.</p><button type="button" className="secondary small" disabled={busy} onClick={()=>{delete purchaseReceiveRequestIdsRef.current[purchaseRequestConflictKey];try{localStorage.removeItem(purchaseRequestConflictKey);}catch{}setPurchaseRequestConflictKey("");setError("Permintaan baru disiapkan. Pastikan riwayat pembelian sebelumnya sudah diperiksa.");}}>Saya sudah memeriksa riwayat, mulai permintaan baru</button></div>}</>}
           </section>
           <section className="panel"><div className="panel-head"><div><h3>Riwayat pembelian</h3><p>100 transaksi pembelian terakhir</p></div></div><div className="table-wrap"><table><thead><tr><th>NOMOR / INVOICE</th><th>PEMASOK</th><th>TANGGAL</th><th>JATUH TEMPO</th><th>TOTAL</th><th>DIBAYAR</th><th>SISA HUTANG</th><th>AKSI</th></tr></thead><tbody>{purchases.map(p=>{const tracked=Boolean(p.payable_tracking_enabled);const paid=Number(p.amount_paid)||0;const balance=Math.max(0,Number(p.total)-paid);const overdue=tracked&&balance>0&&p.due_date&&new Date(p.due_date+"T23:59:59")<new Date();const draft=paymentDrafts[p.id];return <React.Fragment key={p.id}><tr><td><b>{p.purchase_no}</b><small>{p.supplier_invoice_no||"Tanpa nomor invoice"}</small></td><td>{p.suppliers?.name||"—"}</td><td>{new Date(p.created_at).toLocaleString("id-ID")}</td><td>{p.due_date?new Date(p.due_date+"T00:00:00").toLocaleDateString("id-ID"):"—"}{overdue&&<small className="danger-text">Terlambat</small>}</td><td>{money(p.total)}</td><td>{money(paid)}</td><td><b className={!tracked?"muted":balance>0?"danger-text":"text-safe"}>{tracked?money(balance):"—"}</b><small>{!tracked?"Riwayat lama":balance<=0?"Lunas":overdue?"Jatuh tempo lewat":"Belum lunas"}</small></td><td>{tracked&&balance>0&&p.supplier_id?<button className="text-btn" onClick={()=>setPaymentDrafts(old=>({...old,[p.id]:old[p.id]?undefined:{amount:String(balance),method:"Tunai",reference:"",notes:""}}))}>Bayar</button>:"—"}</td></tr>{draft&&<tr><td colSpan="8"><div className="payment-inline"><b>Catat pembayaran · {p.purchase_no}</b><div className="form-grid"><label>Nominal pembayaran<input type="number" min="1" max={balance} value={draft.amount} onChange={e=>setPaymentDrafts(old=>({...old,[p.id]:{...draft,amount:e.target.value}}))}/></label><label>Metode<select value={draft.method} onChange={e=>setPaymentDrafts(old=>({...old,[p.id]:{...draft,method:e.target.value}}))}>{["Tunai","Transfer bank","QRIS","Debit"].map(x=><option key={x}>{x}</option>)}</select></label><label>Referensi<input value={draft.reference} onChange={e=>setPaymentDrafts(old=>({...old,[p.id]:{...draft,reference:e.target.value}}))} placeholder="Nomor bukti transfer"/></label><label>Catatan<input value={draft.notes} onChange={e=>setPaymentDrafts(old=>({...old,[p.id]:{...draft,notes:e.target.value}}))} placeholder="Catatan"/></label></div><div className="form-actions"><button className="primary" disabled={busy} onClick={()=>paySupplierInvoice(p)}>Simpan pembayaran</button><button className="secondary" onClick={()=>setPaymentDrafts(old=>({...old,[p.id]:undefined}))}>Batal</button></div></div></td></tr>}</React.Fragment>})}</tbody></table></div>{purchases.length===0&&<div className="empty">Belum ada riwayat pembelian.</div>}</section><section className="panel"><div className="panel-head"><div><h3>Riwayat pembayaran supplier</h3><p>Setiap pembayaran tercatat sebagai pengeluaran kas dengan referensi tagihan.</p></div></div><div className="table-wrap"><table><thead><tr><th>TANGGAL</th><th>PEMBELIAN</th><th>PEMASOK</th><th>METODE</th><th>REFERENSI</th><th>NOMINAL</th></tr></thead><tbody>{supplierPayments.map(pay=>{const po=purchases.find(x=>x.id===pay.purchase_id);return <tr key={pay.id}><td>{new Date(pay.created_at).toLocaleString("id-ID")}</td><td>{po?.purchase_no||"Pembelian"}</td><td>{suppliers.find(s=>s.id===pay.supplier_id)?.name||"—"}</td><td>{pay.payment_method}</td><td>{pay.reference_no||"—"}</td><td><b>{money(pay.amount)}</b></td></tr>})}</tbody></table></div>{supplierPayments.length===0&&<div className="empty">Belum ada pembayaran supplier.</div>}</section></>}
 
